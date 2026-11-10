@@ -1,6 +1,6 @@
 # Universal RPA Agent — Технічна архітектура SaaS-продукту
 
-**Версія:** 1.3 · **Дата:** 2026-11-10 · **Статус:** аудит завершено · контракт універсальності зафіксовано
+**Версія:** 1.4 · **Дата:** 2026-11-10 · **Статус:** аудит завершено · контракт універсальності зафіксовано
 **Автор:** архітектурна група · **Аудиторія:** засновник, перші інженери, інвестори (технічна частина)
 
 ---
@@ -44,6 +44,8 @@
 **16. [Модуль парсингу та аналізу (маркетплейси)](#16-модуль-парсингу-та-аналізу-маркетплейси)** — JSON-LD замість браузера, парсинг цін, дедуплікація, історія цін
 
 **17. [Модуль безпеки акаунтів (Account Vault)](#17-модуль-безпеки-акаунтів-account-vault)** — Account Vault: ієрархія ключів, write-only секрети, TOTP, canary
+
+**18. [Модуль Affiliate & Monetization](#18-модуль-affiliate--monetization)** — CPA-мережі, deep link, postback та ідемпотентність, облік доходу, розкриття
 
 **Частина III — аудит і план побудови**
 
@@ -157,6 +159,7 @@ SaaS, у якому користувач пише в чат «знайди ме�
 | **Соцмережі** | Контент, публікація, аналітика, Telegram | §15 |
 | **Парсинг** | Ціни й наявність на маркетплейсах | §16 |
 | **Account Vault** | Безпека доступів до акаунтів клієнтів | §17 |
+| **Affiliate** | Партнерська монетизація посилань | §18 |
 
 > **Ці чотири модулі — приклади, а не межа продукту.** Домен може бути будь-яким: бронювання
 > квитків, держпослуги, IT-операції, ресерч. Формальний критерій універсальності та п'ять
@@ -242,6 +245,10 @@ SaaS, у якому користувач пише в чат «знайди ме�
 | 5 | Чи треба нову таблицю для обліку витрат? | **Ні** (використовується `usage_events`) |
 | 6 | Чи треба новий шлях у білінгу? | **Ні** (кредити універсальні) |
 | 7 | Чи треба новий тип approval-запиту? | **Ні** (є `destructive_action`, `bulk_operation`, `external_send`, `policy_bypass`) |
+
+> **Уточнення до правила:** ядро може рости **генеричними швами** — точками розширення, які не
+> знають домену (`OutputTransform`, `IngressHandler`, `ScheduledJob`). Заборонені саме **доменні
+> гілки**. Розрізнення і приклад — у §18.3.1.
 
 ```ts
 // packages/modules/<domain>/
@@ -5039,6 +5046,612 @@ $1/міс за ключ — найдешевший спосіб пройти ц�
 
 ---
 
+## 18. Модуль Affiliate & Monetization
+
+### 18.1. Що це і навіщо
+
+Модуль дозволяє платформі **заробляти на трафіку, який вона вже генерує**. Коли агент у відповіді
+посилається на товар, послугу чи сервіс, посилання може бути партнерським — і конверсія приносить
+комісію.
+
+Але це не «вставити рефку скрізь». Це фінансовий модуль із чотирма жорсткими обмеженнями, і кожне
+з них — архітектурне, а не декларативне.
+
+**Три бізнес-моделі, які модуль має підтримувати:**
+
+| Модель | Чий CPA-акаунт | Хто заробляє | Коли застосовувати |
+|---|---|---|---|
+| **Platform (наш)** | Наш | Ми | Безкоштовний тариф; монетизація замість підписки |
+| **BYO (клієнтський)** | Клієнта | Клієнт | Платні тарифи; клієнт заробляє більше, ми беремо за SaaS |
+| **Revenue share** | Наш | Ми + клієнт ділимо | Партнерська програма для агенцій |
+
+**BYO — це головна модель для B2B.** Клієнт-магазин хоче, щоб агент, який шукає йому постачальників,
+підставляв *його* партнерські посилання. Це збільшує його ROI і виправдовує вищий тариф. Модель
+Platform — це те, що фінансує безкоштовний тариф.
+
+### 18.2. Головне правило: монетизація не впливає на відповідь
+
+Це найважливіше рішення модуля, і воно не про етику, а про те, що продукт перестане працювати.
+
+```
+❌ ЗАБОРОНЕНО:  вибір товару → «де більше комісія?» → відповідь
+✅ ПРАВИЛЬНО:  вибір товару → відповідь → (пост-обробка) → підстановка посилання
+```
+
+| Правило | Механізм перевірки |
+|---|---|
+| Ранжування не бачить комісій | Модуль не має доступу до етапу ранжування взагалі |
+| Підстановка — після фіксації відповіді | `OutputTransform` виконується після `run.completed` |
+| Порядок і склад результатів не змінюється | Rewrite змінює **тільки URL**, ніколи порядок/склад |
+| Відповідь не стверджує, що посилання звичайні | Policy: на пряме питання — чесна відповідь (§18.10) |
+
+`TEST: прогнати той самий запит із монетизацією on/off → множина товарів, їхній порядок і всі
+текстові твердження ідентичні; відрізняються лише URL.`
+
+Якщо це правило порушене — продукт втрачає довіру за місяць. Люди пробачають рекламу, але не
+пробачають, коли їм продали гірший товар заради комісії.
+
+### 18.3. Точки дотику з ядром
+
+Модуль торкається ядра у **трьох місцях**, і всі три — генеричні, не доменні.
+
+```mermaid
+flowchart LR
+    subgraph Core["Ядро (без доменних знань)"]
+        R["run.completed"] --> OT["OutputTransform chain"]
+        OT --> D["Доставка / артефакти"]
+        E["Ingress / webhooks"] --> H["Handler registry"]
+    end
+
+    subgraph Mod["Модуль affiliate"]
+        A["AffiliateTransform<br/>(rewrite URLs)"]
+        B["PostbackHandler<br/>(verify, idempotent)"]
+        C["Reconciliation job"]
+        DB[("affiliate_* таблиці")]
+    end
+
+    OT --> A --> D
+    H --> B --> DB
+    C --> DB
+    A --> DB
+```
+
+| Точка | Що це | Чому генерична |
+|---|---|---|
+| **1. `OutputTransform`** | Ланцюжок перетворень фінальної відповіді перед доставкою | Будь-який модуль може захотіти трансформацію: редагування PII, локалізація, водяний знак, монетизація. Ядро не знає, навіщо |
+| **2. Ingress handler registry** | Реєстрація обробника `POST /v1/hooks/affiliate/:network/:tenant` | Ingress уже є (§23.7); модуль лише реєструє свій обробник |
+| **3. Scheduled jobs** | Нічна звірка | Той самий cron, що й у §23.3 |
+
+#### 18.3.1. Уточнення до контракту універсальності (§1.6)
+
+Тут треба бути чесним: `OutputTransform` — це **нове в ядрі**. Zero-Core-Change Test (§1.6.3)
+формально дає «так» на питання 1 (новий тип події `output.transformed`).
+
+Це не порушення, якщо розрізняти два різні явища:
+
+| | Доменна гілка (заборонено) | Генеричний шов (дозволено) |
+|---|---|---|
+| Приклад | `if (domain === 'crm')` | `for (t of transforms) t.apply(output)` |
+| Знає про домен | Так | Ні |
+| Скільки модулів обслуговує | Один | Будь-який |
+| Додається | Під конкретну фічу | Один раз, для класу задач |
+
+**Правило (доповнення до R1–R5):** ядро може рости **генеричними швами** — точками розширення, які
+не знають домену. Воно не може рости **доменними гілками**. Шов додається один раз і служить усім.
+
+`TEST: у CI існує другий, фіктивний `OutputTransform` (наприклад, `watermark`), і він працює без
+жодних змін у ядрі — це доводить, що шов генеричний, а не affiliate-специфічний.`
+
+### 18.4. Модель даних
+
+```sql
+-- ============ КОНФІГУРАЦІЯ МЕРЕЖ ============
+CREATE TABLE affiliate_networks (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       uuid,                       -- NULL = платформний акаунт
+  network         text NOT NULL,              -- 'admitad' | 'salesdoubler' | 'syndicate' | 'generic'
+  display_name    text NOT NULL,
+  api_base_url    text NOT NULL,
+  -- секрети НЕ тут: тільки посилання на vault (§17)
+  credential_ref  text NOT NULL,              -- 'vault:aff_net:admitad_main'
+  postback_secret_ref text NOT NULL,          -- окремий секрет для верифікації postback
+  status          text NOT NULL DEFAULT 'active',   -- active | paused | revoked
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, network, display_name)
+);
+
+-- ============ КАМПАНІЇ (програми) ============
+CREATE TABLE affiliate_campaigns (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  network_id      uuid NOT NULL REFERENCES affiliate_networks(id) ON DELETE CASCADE,
+  external_id     text NOT NULL,              -- id програми в мережі
+  name            text NOT NULL,
+  -- шаблон deep link; формат береться з кабінету мережі, НЕ хардкодиться
+  deeplink_template text NOT NULL,            -- 'https://trk.example/{campaign}?ulp={target}&subid={click_id}'
+  commission_kind text NOT NULL,              -- 'percent' | 'fixed'
+  commission_value numeric(10,4) NOT NULL,
+  currency        char(3) NOT NULL DEFAULT 'USD',
+  allowed_domains text[] NOT NULL,            -- до яких сайтів застосовна
+  geo             text[],                     -- ISO-коди або NULL
+  cookie_ttl_hours integer NOT NULL DEFAULT 720,
+  status          text NOT NULL DEFAULT 'active',
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (network_id, external_id)
+);
+
+-- ============ КЛІКИ (наша атрибуція) ============
+CREATE TABLE affiliate_clicks (
+  click_id        text PRIMARY KEY,           -- ULID, іде як subid у мережу
+  tenant_id       uuid NOT NULL,
+  run_id          uuid,
+  user_id         uuid,
+  campaign_id     uuid NOT NULL REFERENCES affiliate_campaigns(id),
+  original_url    text NOT NULL,
+  deeplink_url    text NOT NULL,
+  url_hash        text NOT NULL,              -- sha256(original_url) — для матчингу при втраті subid
+  surface         text NOT NULL,              -- 'chat_answer' | 'report' | 'artifact' | 'email'
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ON affiliate_clicks (tenant_id, created_at DESC);
+CREATE INDEX ON affiliate_clicks (campaign_id, created_at DESC);
+
+-- ============ КОНВЕРСІЇ (postback) ============
+CREATE TABLE affiliate_conversions (
+  id              bigserial PRIMARY KEY,
+  tenant_id       uuid NOT NULL,
+  network_id      uuid NOT NULL,
+  external_id     text NOT NULL,              -- id конверсії в мережі (ідемпотентність!)
+  click_id        text REFERENCES affiliate_clicks(click_id),
+  status          text NOT NULL,              -- pending | approved | paid | reversed | rejected
+  amount          numeric(12,2) NOT NULL,     -- сума замовлення
+  commission      numeric(12,2) NOT NULL,     -- наша комісія
+  currency        char(3) NOT NULL,
+  fx_rate_to_usd numeric(12,6),
+  commission_usd  numeric(12,2),
+  order_ref       text,
+  occurred_at     timestamptz NOT NULL,
+  received_at     timestamptz NOT NULL DEFAULT now(),
+  raw_payload     jsonb NOT NULL,
+  UNIQUE (network_id, external_id)            -- ← головний захист від дублів
+);
+CREATE INDEX ON affiliate_conversions (tenant_id, occurred_at DESC);
+CREATE INDEX ON affiliate_conversions (status) WHERE status IN ('pending','approved');
+
+-- ============ ЖУРНАЛ POSTBACK (аудит і replay) ============
+CREATE TABLE affiliate_postback_log (
+  id              bigserial PRIMARY KEY,
+  network_id      uuid,
+  received_at     timestamptz NOT NULL DEFAULT now(),
+  source_ip       inet,
+  signature_ok    boolean NOT NULL,
+  body            jsonb NOT NULL,
+  resolution      text NOT NULL,              -- accepted | duplicate | rejected_sig | unknown_click
+  error           text
+);
+
+-- ============ ДОХІД (окремо від витрат!) ============
+CREATE TABLE revenue_events (
+  id              bigserial PRIMARY KEY,
+  tenant_id       uuid NOT NULL,
+  kind            text NOT NULL,              -- 'affiliate_commission' | 'byo_earnings' | 'refund'
+  source_id       text,                       -- conversion id
+  amount_usd      numeric(12,2) NOT NULL,     -- може бути від'ємним при reversal
+  status          text NOT NULL,
+  occurred_at     timestamptz NOT NULL,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (kind, source_id)
+);
+```
+
+**Чому `revenue_events` окремо від `usage_events` (§7.6):**
+- `usage_events` — це **наші витрати** (токени, проксі), вони списують кредити.
+- `revenue_events` — це **чужий дохід**, який приходить із запізненням на 30–90 днів і може бути
+  відкликаний (повернення товару).
+- Змішувати їх в одній таблиці — означає плутати маржу з оборотом. Це класична помилка, яка робить
+  фінансову звітність непридатною.
+
+### 18.5. Генерація deep link
+
+Формат deep link у кожної мережі свій, і він **змінюється**. Тому — шаблон у конфізі, не в коді.
+
+```ts
+interface DeepLinkRequest {
+  campaignId: string;
+  targetUrl: string;        // звичайне посилання на товар
+  tenantId: string;
+  runId?: string;
+  userId?: string;
+  surface: "chat_answer" | "report" | "artifact" | "email";
+}
+
+interface DeepLinkResult {
+  clickId: string;          // ULID — наш subid
+  deeplink: string;         // готове партнерське посилання
+  network: string;
+  campaign: string;
+}
+```
+
+**Алгоритм:**
+
+```
+1. Перевірити, що targetUrl ∈ campaign.allowed_domains       → інакше відмова
+2. Перевірити geo (якщо задано)                              → інакше відмова
+3. Згенерувати click_id = ULID()
+4. Підставити шаблон:
+     template.replace('{campaign}', campaign.external_id)
+            .replace('{target}', encodeURIComponent(targetUrl))
+            .replace('{click_id}', click_id)
+5. Валідувати результат:
+     - це валідний URL
+     - містить click_id
+     - хост належить мережі (allowlist хостів трекера)
+6. Записати affiliate_clicks (original + deeplink + url_hash)
+7. Повернути deeplink
+```
+
+**Підводні камені, які ламають атрибуцію:**
+
+| Проблема | Наслідок | Рішення |
+|---|---|---|
+| Подвійне кодування `{target}` | Мережа отримує `https%253A%252F%252F...` → 404 | Кодувати рівно один раз; валідація після підстановки |
+| `{target}` без кодування | Ламається, якщо в URL є `&` | Завжди `encodeURIComponent` |
+| `click_id` із недозволених символів | Мережа обрізає subid | Тільки `[A-Z0-9]` (ULID — саме такий) |
+| Шаблон із застарілого кабінету | Усі кліки йдуть у нікуди | Canary: 1 тестовий клік на добу + перевірка, що мережа його бачить |
+| Мережа вимагає власний `subid` формат | Втрата атрибуції | Конфіг `subid_format` на campaign |
+
+```ts
+interface DeeplinkTemplateCheck {
+  // виконується при збереженні шаблону в UI
+  hasTargetPlaceholder: boolean;
+  hasClickIdPlaceholder: boolean;
+  producesValidUrl: boolean;           // на прикладі
+  hostInNetworkAllowlist: boolean;
+}
+```
+
+`TEST: property-based — для 10 000 випадкових URL (з `&`, `?`, Unicode, пробілами) згенерований
+deep link завжди декодується назад у початковий target.`
+
+### 18.6. Postback: прийом, верифікація, ідемпотентність
+
+CPA-мережа надсилає нам HTTP-запит: «клік X → замовлення → комісія Y». Це фінансова подія, тому
+ставимось до неї як до платежу, а не як до аналітики.
+
+#### 18.6.1. Маршрут і верифікація
+
+```
+POST /v1/hooks/affiliate/{networkId}/{tenantId}?token=...
+```
+
+| Шар | Механізм | Обов'язково |
+|---|---|---|
+| **1. Секрет у шляху** | `postback_secret_ref` із vault; порівняння constant-time | **Так** (усі мережі це підтримують) |
+| **2. HMAC-підпис тіла** | `X-Signature: sha256=...` | Де підтримується |
+| **3. IP allowlist** | Діапазони мережі | Де мережа публікує |
+| **4. Timestamp + nonce** | Відхиляти старші за 5 хв | Де підтримується |
+| **5. Rate limit** | 100/хв на network | Так |
+
+**Чесна реальність:** більшість пострадянських CPA-мереж підтримують **тільки статичний токен у URL**.
+Тому базовий рівень — токен + IP allowlist, а HMAC вмикається там, де є. У документі це зафіксовано,
+щоб не будувати ілюзію повної криптографії.
+
+```ts
+interface VerifiedPostback {
+  ok: boolean;
+  reason?: "bad_token" | "bad_signature" | "ip_not_allowed" | "replay" | "malformed";
+  networkId: string;
+  tenantId: string;
+  conversion: {
+    externalId: string;
+    clickId?: string;
+    status: "pending" | "approved" | "paid" | "reversed" | "rejected";
+    orderAmount: number;
+    commission: number;
+    currency: string;
+    occurredAt: Date;
+    orderRef?: string;
+  } | null;
+}
+```
+
+#### 18.6.2. Мапінг полів: конфіг, не код
+
+Кожна мережа називає поля по-своєму (`subid`/`sub_id`/`clickid`, `sum`/`amount`/`order_sum`,
+`status`/`state`). Тому — мапа в конфізі:
+
+```jsonc
+{
+  "network": "admitad",
+  "fieldMap": {
+    "clickId":   "subid",
+    "externalId":"payment_id",
+    "status":    "status",
+    "orderAmount":"order_sum",
+    "commission":"payment",
+    "currency":  "currency",
+    "orderRef":  "order_id"
+  },
+  "statusMap": {
+    "pending":  ["waiting", "pending"],
+    "approved": ["approved", "confirmed"],
+    "paid":     ["paid"],
+    "reversed": ["rejected", "returned", "cancelled"]
+  },
+  "signature": { "type": "none" }   // або { "type": "hmac", "header": "X-Signature", "algo": "sha256" }
+}
+```
+
+**Нова мережа = новий JSON, не новий код.** Це і є Zero-Core-Change у дії.
+
+#### 18.6.3. State machine конверсії
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: postback "waiting"
+    pending --> approved: postback "approved"
+    pending --> reversed: postback "returned"
+    approved --> paid: виплата від мережі
+    approved --> reversed: повернення товару
+    paid --> reversed: рідко (спір)
+    reversed --> [*]
+    paid --> [*]
+```
+
+**Правила переходів:**
+
+| Правило | Чому |
+|---|---|
+| `paid → approved` заборонено | Відкат назад — ознака помилки або атаки |
+| `reversed` — термінальний | Не можна «відновити» конверсію тим самим id |
+| `pending → paid` дозволено | Мережа може не надіслати `approved` |
+| Повторний postback із тим самим статусом | Ігнорується (idempotent) |
+| Postback із новим статусом | Оновлює + пише `revenue_events` із коригуванням |
+
+#### 18.6.4. Ідемпотентність
+
+Мережі **повторюють postback** (retry при таймауті на нашому боці). Без захисту — подвійний дохід
+у звіті, і це гірше, ніж втрата.
+
+```sql
+INSERT INTO affiliate_conversions (network_id, external_id, ...)
+VALUES (...)
+ON CONFLICT (network_id, external_id) DO UPDATE
+SET status = EXCLUDED.status,
+    commission = EXCLUDED.commission,
+    received_at = now(),
+    raw_payload = EXCLUDED.raw_payload
+WHERE affiliate_conversions.status <> 'reversed';   -- не воскрешаємо скасовані
+```
+
+```ts
+// порядок обробки
+1. Верифікувати (18.6.1)                → fail: лог + 401/403
+2. Розпарсити через fieldMap            → fail: лог + 400
+3. Знайти click за click_id             → не знайдено: 'unknown_click', все одно зберегти
+4. UPSERT конверсії                     → duplicate: 200 OK (ідемпотентно!)
+5. Якщо статус змінився → revenue_event
+6. Завжди 200 OK, навіть для дубля       ← критично: інакше мережа ретраїть вічно
+```
+
+**Правило: postback-ендпоінт завжди відповідає 200, якщо запит автентичний**, навіть якщо це дубль
+або невідомий клік. Помилка 500 → мережа ретраїть → шторм. Єдиний виняток — поганий підпис (401).
+
+`TEST: надіслати той самий postback 5 разів → 5×200, 1 конверсія, 1 revenue_event.`
+
+#### 18.6.5. Валютні курси
+
+Комісія приходить у валюті мережі. Для звітності — у USD, але **з фіксацією курсу на момент
+отримання**:
+
+```sql
+fx_rate_to_usd numeric(12,6),   -- курс на received_at
+commission_usd  numeric(12,2)
+```
+
+Курс беремо з безкоштовного джерела (ECB / exchangerate.host free tier) і кешуємо на добу. Якщо
+курс недоступний — конверсія зберігається з `fx_rate_to_usd = NULL` і дораховується нічною джобою.
+**Ніколи не конвертувати «потім за поточним курсом»** — це робить історію невідтворюваною.
+
+### 18.7. Атрибуція і що робити, коли вона втрачена
+
+| Сценарій | Наслідок | Мітигація |
+|---|---|---|
+| Користувач відкрив посилання на іншому пристрої | `subid` втрачено | Матчинг по `url_hash` + часове вікно |
+| Мережа обрізала subid | Немає `click_id` | Постбек приймаємо, конверсію зберігаємо без кліка |
+| Користувач скопіював посилання собі | Клік не наш | Прийнятно (це його право) |
+| Cookie заблоковані | Мережа не зарахує | Нічого не робимо; це нормальний відсоток втрат |
+| Мережа не надіслала postback | Дохід не бачимо | Звірка зі звітом мережі (§18.8) |
+
+**Правило:** конверсія без кліка **все одно зберігається** (`click_id = NULL`). Втрачена атрибуція —
+це не привід втрачати гроші у звітності. У звітах такі конверсії позначаються `unattributed` і
+видно їхній відсоток.
+
+### 18.8. Звірка з мережами
+
+Postback — це «real-time, best effort». Офіційний звіт мережі — це джерело істини для грошей.
+Тому — щоденна/щомісячна звірка (той самий патерн, що §20.7).
+
+```
+Щодня 04:00:
+  1. Витягнути звіт мережі за останні 7 днів (API, capability 'report')
+  2. Порівняти з нашими affiliate_conversions за (external_id)
+  3. Класифікувати:
+     a) є в звіті, немає в нас        → «усиновити» (створити конверсію)
+     b) є в нас, немає в звіті        → позначити `unconfirmed`, НЕ видаляти
+     c) суми різняться                → звіт перемагає, записати розбіжність
+     d) статуси різняться             → звіт перемагає
+  4. Записати affiliate_reconciliation_runs
+  5. Розбіжність > 5% → алерт
+```
+
+```sql
+CREATE TABLE affiliate_reconciliation_runs (
+  id           uuid PRIMARY KEY,
+  network_id   uuid NOT NULL,
+  period_from  date NOT NULL,
+  period_to    date NOT NULL,
+  in_report    integer NOT NULL,
+  in_db        integer NOT NULL,
+  adopted      integer NOT NULL,
+  unconfirmed  integer NOT NULL,
+  amount_diff  numeric(12,2),
+  status       text NOT NULL,          -- ok | warn | alert
+  details      jsonb,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+```
+
+**Чому це критично:** без звірки бухгалтерія розходиться з реальністю на 5–20%, і ніхто не знає, де.
+Зі звіркою — розбіжність видна і має причину.
+
+### 18.9. Fraud і ToS-обмеження
+
+| Ризик | Що це | Захист |
+|---|---|---|
+| **Self-referral** | Наш власний користувач купує через своє посилання | Policy: конверсія з `user_id == buyer` → `rejected`; у BYO-режимі — клієнт сам відповідає |
+| **Click spam** | 1000 кліків з одного IP/пристрою | Ліміт кліків на user/годину; аномалія → `flagged` |
+| **Incentivized traffic** | «Заплатимо за клік» | Заборонено AUP; детект за патерном |
+| **Cookie stuffing** | Нав'язування cookie на чужих сайтах | Ми **не ставимо** cookie на сторонніх сайтах — проблема відсутня за дизайном |
+| **Непрозоре розкриття** | Приховані партнерські посилання | §18.10 — обов'язково |
+| **Порушення ToS мережі** | Деякі забороняють автоматичну підстановку | Перевірка перед підключенням мережі; домен у `mode: confirm` |
+
+**Важливо:** частина CPA-мереж у своїх правилах **прямо забороняє** автоматичну вставку посилань у
+контент, згенерований ботом, або вимагає розкриття. Тому модуль має **реєстр дозволених мереж** із
+полем `automation_policy: allowed | disclosure_required | prohibited`. Підключити мережу з
+`prohibited` — неможливо (перевірка при збереженні).
+
+### 18.10. Прозорість: розкриття і чесність
+
+Це не «юридична формальність». Це умова, за якої продукт не втрачає довіру.
+
+| Вимога | Реалізація |
+|---|---|
+| **Позначка в UI** | Біля відповіді: «Деякі посилання — партнерські» + іконка |
+| **`rel="sponsored"`** | Автоматично на всі переписані посилання (вимога Google) |
+| **`data-affiliate="<network>"`** | Атрибут для аудиту й аналітики |
+| **Чесна відповідь на питання** | Policy: якщо користувач питає «це рефка?» — відповідь «так» |
+| **Не переписувати все** | Тільки посилання на товари/послуги; ніколи — на власний сайт клієнта, документацію, держпортали |
+| **Вимкнення** | Тумблер у налаштуваннях тенанта; на платних тарифах — **вимкнено за замовчуванням** |
+
+**Чому на платних тарифах вимкнено за замовчуванням:** клієнт уже платить. Монетизувати його повторно
+— це відчуття «мене обікрали», навіть якщо формально все законно. Монетизація — інструмент
+безкоштовного тарифу і BYO-режиму.
+
+```ts
+interface MonetizationPolicy {
+  enabled: boolean;
+  mode: "platform" | "byo" | "off";
+  disclosureStyle: "banner" | "inline" | "both";
+  excludedDomains: string[];        // ніколи не переписувати
+  maxLinksPerAnswer: number;        // щоб не виглядало як спам
+  rewriteOnlyWhenAsked: boolean;    // переписувати лише якщо запит «де купити»
+}
+```
+
+### 18.11. Безпека ключів
+
+Модуль повторно використовує Account Vault (§17), а не вигадує своє сховище.
+
+| Секрет | Зберігання | Ротація | Хто читає |
+|---|---|---|---|
+| API-ключ мережі | `credential_ref` → vault, tenant DEK | 90 днів | Тільки `AffiliateAdapter` |
+| Postback-секрет | `postback_secret_ref` → vault | 180 днів | Тільки верифікатор postback |
+| OAuth-токен (де є) | vault + refresh | автоматично | Adapter |
+
+**Правила (успадковані з §17):**
+- Агент ніколи не бачить ключ — тільки `secretRef`.
+- Агент **не має інструмента**, який повертає ключ. Взагалі.
+- Postback-секрет ніколи не логується; у `affiliate_postback_log` — тільки `signature_ok: boolean`.
+- Порівняння токена — constant-time (`crypto.timingSafeEqual`), інакше timing-attack.
+
+`TEST: grep по логах після 100 postback'ів → жодного входження секрету; секрет не з'являється в
+жодному `run_event`.`
+
+### 18.12. Облік доходу в UI
+
+| Екран | Що показує |
+|---|---|
+| **Earnings** | Кліки, конверсії, дохід за період, по мережах |
+| **Конверсії** | Список із статусами, фільтр `unattributed` / `unconfirmed` |
+| **Звірка** | Останній прогін, розбіжність, статус |
+| **Налаштування** | Мережі, кампанії, політика розкриття, виключені домени |
+
+**Обов'язково:** дохід показується окремо від витрат. «Ви витратили $12 на токени і заробили $8 на
+партнерці» — це два різні рядки, не один.
+
+### 18.13. Zero-Core-Change Test для цього модуля
+
+Чесно, по пунктах §1.6.3:
+
+| # | Питання | Відповідь | Коментар |
+|---|---|---|---|
+| 1 | Новий тип події? | **Так** — `output.transformed` | **Генеричний** шов, не доменний (§18.3.1) |
+| 2 | Зміна `Plan`/`TaskNode`? | Ні | Модуль не бере участі в плануванні |
+| 3 | Правка промпту планувальника? | **Ні** | Ключове: агент не знає про монетизацію |
+| 4 | `if (domain === ...)` в executor? | Ні | — |
+| 5 | Нова таблиця витрат? | Ні | `revenue_events` — окремий облік доходу, не витрат |
+| 6 | Новий шлях у білінгу? | Ні | Кредити не змінюються |
+| 7 | Новий тип approval? | Ні | — |
+
+**Підсумок:** один генеричний шов (`OutputTransform`), нуль доменних гілок. Модуль можна вимкнути
+прапорцем — ядро працює далі.
+
+### 18.14. Метрики
+
+| Метрика | Формула | Ціль |
+|---|---|---|
+| **Monetization rate** | відповідей із партнерськими посиланнями / всього | 15–40% (не 100%) |
+| **CTR** | кліки / показані посилання | 1–4% |
+| **CR** | конверсії / кліки | 1–5% |
+| **EPC** | дохід / кліки | залежить від ніші |
+| **Attribution rate** | конверсії з `click_id` / всі конверсії | > 85% |
+| **Reconciliation drift** | розбіжність зі звітом мережі | < 3% |
+| **Unattributed share** | конверсії без кліка | < 15% |
+| **Reversal rate** | `reversed` / всього | < 10% |
+
+**Реалістична економіка (щоб не будувати ілюзій):**
+
+```
+1000 задач × ~8 посилань = 8 000 показів
+CTR 2%                   = 160 кліків
+CR 2%                    = 3,2 конверсії
+AOV $50, комісія 3%      = $1.50/конверсія
+Разом                    ≈ $4.8 на 1000 задач ≈ $0.005/задача
+```
+
+Це **не основний дохід**. Це маржинальний плюс, який фінансує безкоштовний тариф і покриває
+собівартість проксі. Реальні гроші — у BYO-режимі, де клієнт заробляє набагато більше і платить
+нам за SaaS.
+
+### 18.15. Шлях за $0 і що купуємо пізніше
+
+| Потреба | $0 | Пізніше |
+|---|---|---|
+| Тестова мережа | **Мок-CPA-сервер** (`json-server` + наш postback-формат) | Реальна мережа після реєстрації |
+| Deep link | Шаблон у конфізі | — |
+| Postback | Власний підпис + mock | HMAC, де підтримується |
+| Курси валют | **exchangerate.host free tier** / ECB XML | Платний API при обсязі |
+| Звірка | Власна джоба | — |
+| Реєстрація в мережах | Безкоштовна (Admitad, SalesDoubler, Syndicate) | — |
+
+**Реєстрація в CPA-мережі — безкоштовна**, але вимагає модерації сайту (1–7 днів). Тому почати
+треба заздалегідь, а до схвалення — працювати на мок-сервері.
+
+### 18.16. Ризики
+
+| Ризик | Ймов. | Вплив | Мітигація |
+|---|---|---|---|
+| Мережа забороняє автоматичну підстановку | Середня | Високий | Реєстр `automation_policy`; перевірка при підключенні |
+| Втрата атрибуції > 30% | Середня | Середній | Матчинг по `url_hash`, моніторинг |
+| Користувачі сприймають як «наживу» | **Висока** | Високий | Розкриття, вимкнено на платних, ліміт посилань |
+| Мережа не виплачує / банкує акаунт | Середня | Середній | 2+ мережі, диверсифікація |
+| Подвійні конверсії | Низька | Високий | `UNIQUE(network, external_id)` |
+| Звірка показує великий дрейф | Середня | Середній | Алерт > 5%, ручний розбір |
+| Self-referral | Середня | Високий | Policy-фільтр + аудит |
+
+---
+
 ## 19. Реєстр прогалин (gap register)
 
 ### 19.1. Про «100% впевненість» — чесно
@@ -6523,6 +7136,8 @@ synthetic tenant
 | 0028 | Ніколи не писати неперевірені дані в канонічні таблиці | Accepted |
 | 0029 | Великий вибух = один реліз, 8 паралельних треків, walking skeleton | Accepted |
 | 0030 | Універсальність = Zero-Core-Change Test + синтетичний домен у CI | Accepted |
+| 0031 | Монетизація — пост-обробка (OutputTransform), ніколи не впливає на вибір | Accepted |
+| 0032 | Дохід (`revenue_events`) обліковується окремо від витрат (`usage_events`) | Accepted |
 
 ### 25.2. Схема подій run
 
@@ -6691,3 +7306,4 @@ Acceptance criteria: {criteria}.
 *1.1: додано Частину II — бізнес-модулі (CRM, соцмережі, парсинг, Account Vault); скоуп розширено до Universal RPA Agent.*
 *1.2: додано Частину III — аудит (20 прогалин), ідемпотентність і outbox, стійкість і health checks, якість даних, вісім відсутніх компонентів, план «великого вибуху».*
 *1.3: додано §1.6–1.7 — контракт універсальності (Zero-Core-Change Test, антипатерни, межі) і п'ять різнорідних задач поза торгівлею.*
+*1.4: додано §18 — модуль Affiliate & Monetization (CPA-мережі, deep link, postback, облік доходу), уточнення про генеричні шви.*
