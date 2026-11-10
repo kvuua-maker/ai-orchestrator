@@ -1,0 +1,27 @@
+{
+  "name": "ai-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-agent AI orchestrator SaaS: chat in, plan and execution out (browser, code, shell, APIs).",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev": "echo \"wire up after milestone 2\" && exit 0",
+    "build": "echo \"wire up after milestone 2\" && exit 0",
+    "lint": "echo \"wire up after milestone 2\" && exit 0",
+    "test": "echo \"wire up after milestone 2\" && exit 0",
+    "typecheck": "echo \"wire up after milestone 2\" && exit 0",
+    "db:up": "docker compose -f infra/docker/docker-compose.dev.yml up -d",
+    "db:down": "docker compose -f infra/docker/docker-compose.dev.yml down"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {},
+  "dependencies": {}
+}

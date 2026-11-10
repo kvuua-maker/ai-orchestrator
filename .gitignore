@@ -1,0 +1,60 @@
+# dependencies
+node_modules/
+.pnpm-store/
+vendor/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# builds
+dist/
+build/
+.next/
+.turbo/
+out/
+*.tsbuildinfo
+
+# env & secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+
+# runtime artifacts
+logs/
+*.log
+tmp/
+.tmp/
+runs/
+artifacts/
+screenshots/
+traces/
+downloads/
+
+# browser profiles (contain cookies = credentials)
+.browser-profiles/
+profiles/
+
+# database
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# test / coverage
+coverage/
+.nyc_output/
+playwright-report/
+test-results/

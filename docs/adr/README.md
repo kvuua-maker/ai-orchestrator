@@ -1,0 +1,62 @@
+# Architecture Decision Records
+
+One file per decision. **Immutable once accepted** — to change a decision, write a new ADR that supersedes
+the old one. This is how we avoid re-litigating the same arguments every three months.
+
+## Format
+
+```
+# ADR-NNNN: <short decision title>
+
+- **Status:** Proposed | Accepted | Superseded by ADR-NNNN | Deprecated
+- **Date:** YYYY-MM-DD
+- **Deciders:** <names/roles>
+- **Supersedes:** ADR-NNNN (optional)
+
+## Context
+What forces are at play? Constraints, numbers, deadlines. No opinions yet.
+
+## Decision
+We will <do X>. One paragraph, unambiguous.
+
+## Consequences
+### Positive
+### Negative
+### Neutral / follow-ups
+
+## Alternatives considered
+| Option | Why rejected |
+```
+
+A good ADR fits on one screen. If it needs three, the decision is probably two decisions.
+
+## Index
+
+| ADR | Decision | Status |
+|---|---|---|
+| 0001 | TypeScript monorepo instead of a Python backend | Proposed |
+| 0002 | Own agent runtime instead of LangChain/CrewAI | Proposed |
+| 0003 | Plan-and-Execute (DAG) instead of pure ReAct | Proposed |
+| 0004 | pg-boss for MVP queues, Temporal as the migration point | Proposed |
+| 0005 | Postgres + pgvector instead of a dedicated vector DB | Proposed |
+| 0006 | Shared DB + RLS for multi-tenancy | Proposed |
+| 0007 | Playwright + patchright as the base browser driver | Proposed |
+| 0008 | 6-tier browser escalation ladder (T0–T5) | Proposed |
+| 0009 | Docker + gVisor as the default sandbox | Proposed |
+| 0010 | Dual-LLM (quarantined reader) for untrusted content | Proposed |
+| 0011 | Own usage ledger as the source of truth for limits | Proposed |
+| 0012 | Merchant of Record first, direct Stripe later | Proposed |
+| 0013 | SSE instead of WebSocket for streaming | Proposed |
+| 0014 | Human takeover as a first-class feature | Proposed |
+| 0015 | Customer-as-operator in Terms + policy engine | Proposed |
+
+Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §13.1 and a
+full argument in the relevant chapter.
+
+## When to write one
+
+Write an ADR when the decision is **expensive to reverse** or **likely to be questioned later**.
+Do not write one for naming a variable.
+
+Typical triggers: choosing a database, a queue, a framework, an isolation model, a pricing model, or a
+public API shape. Also: any decision that a future engineer would look at and ask "why on earth?".
