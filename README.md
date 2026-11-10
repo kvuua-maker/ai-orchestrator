@@ -1,46 +1,65 @@
-# AI-Orchestrator
+# Universal RPA Agent
 
-Multi-agent SaaS: the user types a request in a chat, the system plans it, executes it with real tools
-(browser, code sandbox, shell, HTTP APIs) and returns artifacts.
+SaaS-платформа: користувач пише задачу в чат — система планує її, виконує реальними інструментами
+(браузер, пісочниця, shell, HTTP, CRM API) і повертає артефакти.
 
-> **Status: architecture phase.** No application code yet. See [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Позиціювання: **не «AI-чат», а AI-працівник**, який закриває бізнес-процеси — CRM, соцмережі,
+парсинг маркетплейсів, керування доступами до акаунтів.
 
-## Repository layout (target)
+> **Статус: архітектурна фаза.** Коду застосунку ще немає. Див. [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+## Що всередині архітектури
+
+| Частина | Розділи | Про що |
+|---|---|---|
+| **I — рушій** | §1–§12 | Агенти, браузер і анти-бот, інструменти, пам'ять, SaaS/білінг, безпека, дорожня карта |
+| **II — бізнес-модулі** | §14–§17 | CRM, соцмережі, парсинг маркетплейсів, Account Vault |
+| **Додатки** | §18 | ADR, схема подій, контракти промптів, глосарій, джерела |
+
+## Структура репозиторію (цільова)
 
 ```
 apps/
-  web/          Next.js dashboard + chat UI
-  api/          Fastify control plane (auth, tenants, billing, runs API)
-  worker/       Agent runtime + tool executors (Node) — scales horizontally
+  web/          Next.js: чат, run timeline, артефакти, approvals, live-браузер
+  api/          Fastify control plane: auth, tenants, billing, runs, webhooks
+  worker/       Agent runtime + tool executors (масштабується горизонтально)
 packages/
   agent-core/   Planner, executor loop, run state machine, model router
-  tools/        Tool registry + tool implementations (browser, shell, http, ...)
-  shared/       Types, zod schemas, event contracts, shared utils
+  tools/        Tool registry + інструменти (browser, shell, http, ...)
+  modules/      Бізнес-модулі Частини II
+    crm/        Канонічна модель + адаптери KeyCRM/Bitrix24/LP-CRM/SalesDrive
+    social/     Telegram, YouTube, Instagram, TikTok (офіційні API)
+    scraping/   JSON-LD-first екстрактори для маркетплейсів
+    vault/      Account Vault: шифрування, TOTP, grants
+  shared/       Типи, zod-схеми, контракти подій
 infra/
-  docker/       Local dev compose (postgres, redis, minio, browser-runner)
-  terraform/    Cloud infra (later)
+  docker/       Локальний dev (postgres, redis, minio, browser-runner, libreoffice)
+  terraform/    Хмарна інфраструктура (пізніше)
 docs/
-  adr/          Architecture decision records
-  research/     Research notes feeding ARCHITECTURE.md
+  adr/          Architecture Decision Records
+  research/     Дослідницькі нотатки до ARCHITECTURE.md
 ```
 
-## Read first
+## З чого почати
 
-1. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the full technical plan, all components, roadmap.
-2. `docs/adr/` — the individual decisions, one file each, immutable once accepted.
+1. [`ARCHITECTURE.md`](./ARCHITECTURE.md) §11 — 12-тижневий план за **$0** і тригери витрат.
+2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) §1.5 — що змінює розширення до Universal RPA Agent.
+3. `docs/adr/` — рішення, по одному на файл, незмінні після прийняття.
 
-## Local dev (once milestone 2 lands)
+## Локальний запуск (після віхи 2)
 
 ```bash
 pnpm install
-cp .env.example .env
-pnpm db:up          # postgres + redis + minio + browser-runner
+cp .env.example .env      # за замовчуванням — $0-стек (безкоштовні провайдери)
+pnpm db:up                # postgres + redis + minio + browser-runner
 pnpm dev
 ```
 
-## Non-negotiables
+## Непорушні правила
 
-- Every tenant is isolated at the data layer (RLS) **and** the compute layer (own sandbox namespace).
-- Secrets are never placed in an LLM prompt. Tools receive capability handles, not credentials.
-- Untrusted web content is never concatenated into the privileged reasoning context.
-- Every tool call is auditable: who, what, which run, which arguments hash, which result.
+- Кожен тенант ізольований на рівні даних (RLS) **і** обчислень (власний namespace пісочниці).
+- Секрети ніколи не потрапляють у промпт. Інструменти отримують capability handle, не значення.
+- Недовірений вміст ніколи не змішується з привілейованим контекстом (Dual-LLM).
+- Кожен виклик інструмента аудитується: хто, що, який run, хеш аргументів, результат.
+- **Тільки офіційні API платформ.** Масове створення акаунтів, обхід банів і спам-розсилки — поза
+  скоупом продукту (§15.1).

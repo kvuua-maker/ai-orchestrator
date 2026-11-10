@@ -49,8 +49,16 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0013 | SSE instead of WebSocket for streaming | Proposed |
 | 0014 | Human takeover as a first-class feature | Proposed |
 | 0015 | Customer-as-operator in Terms + policy engine | Proposed |
+| 0016 | Canonical CRM model + adapters instead of direct integrations | Proposed |
+| 0017 | Documents: DOCX template + LibreOffice headless | Proposed |
+| 0018 | Official platform APIs only; bulk account creation out of scope | Accepted |
+| 0019 | Account onboarding via human takeover, no stored password | Proposed |
+| 0020 | Extraction order: JSON-LD → embedded state → DOM → LLM | Proposed |
+| 0021 | Account Vault: three-level key hierarchy, write-only secrets | Proposed |
+| 0022 | Telegram: Bot API for outbound, userbot inbound-only | Accepted |
+| 0023 | A module is a tool pack, never its own infrastructure | Accepted |
 
-Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §13.1 and a
+Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §18.1 and a
 full argument in the relevant chapter.
 
 ## When to write one

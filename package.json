@@ -2,7 +2,7 @@
   "name": "ai-orchestrator",
   "version": "0.1.0",
   "private": true,
-  "description": "Multi-agent AI orchestrator SaaS: chat in, plan and execution out (browser, code, shell, APIs).",
+  "description": "Universal RPA Agent SaaS: chat in, plan and execution out — browser, code, shell, CRM, social, scraping.",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22.0.0",
