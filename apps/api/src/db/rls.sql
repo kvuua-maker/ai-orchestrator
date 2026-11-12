@@ -35,3 +35,20 @@ DO $$ BEGIN
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE memory_chunks ENABLE ROW LEVEL SECURITY;   -- ENABLE обов'язковий: FORCE сам по собі не вмикає
+ALTER TABLE memory_chunks FORCE ROW LEVEL SECURITY;
+ALTER TABLE response_cache ENABLE ROW LEVEL SECURITY;
+ALTER TABLE response_cache FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON memory_chunks TO aio_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON response_cache TO aio_app;
+DO $$ BEGIN
+  CREATE POLICY memory_chunks_tenant ON memory_chunks FOR ALL
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY response_cache_tenant ON response_cache FOR ALL
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -7,7 +7,10 @@ import {
 } from "@aio/shared";
 import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
-import { registry } from "./tools/index.js";
+import { createRegistry } from "./tools/index.js";
+import { createEmbedder } from "./memory/embedder.js";
+import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
+import { cacheGet, cacheSet, cacheKey, cacheStats, cachePurgeExpired } from "./memory/cache.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
 import { newId } from "./ids.js";
 import { createArtifactStore } from "./artifacts/store.js";
@@ -33,7 +36,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   const db = opts.db ?? (await createDb());
   const artifacts = createArtifactStore();
   await seed(db);
-  const engine = createEngine(db, { artifacts });
+  const embedder = createEmbedder();
+  const registry = createRegistry({ db, embedder });
+  const engine = createEngine(db, { artifacts, registry });
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
   const TMP_UPLOADS = join(artifacts.root, "tmp");
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -263,6 +268,37 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     return { ok: true, data: { simulated: true, reason: "no simulate(); input is valid, pure tool would run as-is" }, costMicros: 0, cached: false, dryRun: true, evidence: [], artifacts: [] };
   });
 
+  // ── memory & RAG (§10) ──
+  app.post("/v1/memory/ingest", async (req: any, reply) => {
+    const body = z.object({
+      sourceType: z.enum(["document", "run", "note", "contact"]).default("note"),
+      sourceId: z.string().min(1).max(200),
+      text: z.string().min(1).max(200_000),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
+    const r = await db.tx(req.tenantId, (q) => ingestText(q, { ...body.data, tenantId: req.tenantId, embedder }));
+    return reply.code(201).send(r);
+  });
+
+  app.post("/v1/memory/search", async (req: any, reply) => {
+    const body = z.object({
+      query: z.string().min(1).max(2000),
+      k: z.number().int().min(1).max(50).default(5),
+      sourceType: z.enum(["document", "run", "note", "contact"]).optional(),
+      threshold: z.number().min(0).max(1).optional(),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
+    const [qv] = await embedder.embed([body.data.query]);
+    const hits = await db.tx(req.tenantId, (q) => searchMemory(q, { embedding: Array.from(qv!), ...body.data }));
+    return { hits, embedder: embedder.name, server_time: new Date().toISOString() };
+  });
+
+  app.get("/v1/memory/stats", async (req: any) => db.tx(req.tenantId, (q) => memoryStats(q)));
+
+  // ── response cache (§10.6) ──
+  app.get("/v1/cache/stats", async (req: any) => db.tx(req.tenantId, (q) => cacheStats(q)));
+  app.post("/v1/cache/purge", async (req: any) => ({ purged: await db.tx(req.tenantId, (q) => cachePurgeExpired(q)) }));
+
   // ── documents pipeline (§13) ──
   app.post("/v1/documents/process", async (req: any, reply) => {
     const body = z.object({ key: z.string().length(64) }).safeParse(req.body);
@@ -273,14 +309,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     let bytes: Buffer;
     try { bytes = await artifacts.get(body.data.key); } catch { return reply.code(404).send({ error: { code: "NOT_FOUND", message: "blob missing" } }); }
 
+    const ck = cacheKey({ tenantId: req.tenantId, kind: "doc.process", payload: { key: body.data.key }, version: "v1" });
+    const cached = await db.tx(req.tenantId, (q) => cacheGet<any>(q, ck));
+    if (cached) return reply.header("x-cache", "hit").send(cached);
+
     const result = await processDocument({ name: rows[0].name ?? "file", bytes, mime: rows[0].mime });
-    return {
-      status: result.status,
-      mime: result.mime,
-      pages: result.pages,
-      engine: result.engine,
-      sha256: result.sha256,
-      reasons: result.reasons,
+    const payload = {
+      status: result.status, mime: result.mime, pages: result.pages, engine: result.engine,
+      sha256: result.sha256, reasons: result.reasons,
       parsed: result.parsed ? {
         total: result.parsed.total.value, date: result.parsed.date.value,
         edrpou: result.parsed.edrpou.value, vat: result.parsed.vat.value,
@@ -288,6 +324,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       } : null,
       validation: result.validation,
     };
+    await db.tx(req.tenantId, (q) => cacheSet(q, { key: ck, tenantId: req.tenantId, kind: "doc.process", payload, ttlSeconds: 7 * 86400 })).catch(() => {});
+    return reply.header("x-cache", "miss").send(payload);
   });
 
   app.post("/v1/documents/export", async (req: any, reply) => {

@@ -1,16 +1,24 @@
+import type { Db } from "../db/index.js";
+import type { Embedder } from "../memory/embedder.js";
 import { ToolRegistry } from "./registry.js";
 import { httpFetch } from "./http-fetch.js";
 import { documentsParseReceipt, documentsProcess, documentsExport, documentsFolders } from "./documents-tool.js";
+import { createMemoryTools } from "./memory-tool.js";
 
-export function createRegistry(): ToolRegistry {
-  return new ToolRegistry()
+export interface RegistryDeps { db?: Db; embedder?: Embedder }
+
+export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
+  const reg = new ToolRegistry()
     .register(httpFetch)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)
     .register(documentsFolders);
+  if (deps.db) for (const tool of createMemoryTools(deps.db, deps.embedder)) reg.register(tool);
+  return reg;
 }
 
+/** Базовий реєстр без пам'яті — для тестів і сценаріїв без БД. */
 export const registry = createRegistry();
 
 export { ToolRegistry } from "./registry.js";

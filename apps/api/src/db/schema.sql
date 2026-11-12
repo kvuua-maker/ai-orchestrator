@@ -127,3 +127,50 @@ CREATE TABLE IF NOT EXISTS artifacts (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS artifacts_tenant_idx ON artifacts (tenant_id, created_at DESC);
+
+-- ── Пам'ять і RAG (§10) ──
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE TABLE IF NOT EXISTS memory_chunks (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  source_type text NOT NULL,
+  source_id text NOT NULL,
+  chunk_index integer NOT NULL,
+  content text NOT NULL,
+  content_hash text NOT NULL,
+  embedding real[] NOT NULL,
+  tokens integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, source_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS memory_chunks_trgm_idx ON memory_chunks USING gin (content gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS memory_chunks_tenant_idx ON memory_chunks (tenant_id, created_at DESC);
+
+-- Косинусна подібність для real[] (працює без pgvector)
+CREATE OR REPLACE FUNCTION cosine_similarity(a real[], b real[])
+RETURNS double precision AS $$
+DECLARE
+  s double precision := 0; na double precision := 0; nb double precision := 0; i integer;
+BEGIN
+  IF array_length(a, 1) IS DISTINCT FROM array_length(b, 1) THEN RETURN 0; END IF;
+  FOR i IN 1..array_length(a, 1) LOOP
+    s := s + a[i] * b[i];
+    na := na + a[i] * a[i];
+    nb := nb + b[i] * b[i];
+  END LOOP;
+  IF na = 0 OR nb = 0 THEN RETURN 0; END IF;
+  RETURN s / sqrt(na * nb);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
+CREATE TABLE IF NOT EXISTS response_cache (
+  key text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  kind text NOT NULL,
+  payload jsonb NOT NULL,
+  hits integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS response_cache_tenant_idx ON response_cache (tenant_id, expires_at);
