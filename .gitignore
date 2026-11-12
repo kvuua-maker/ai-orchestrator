@@ -68,3 +68,8 @@ apps/web/next-env.d.ts
 .pgdata/
 .pgrun/
 .secrets/
+
+local_cache/
+*.traineddata
+.cache/
+*.onnx
