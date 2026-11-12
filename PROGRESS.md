@@ -45,7 +45,7 @@ Docker і `psql` у середовищі недоступні (sandbox), том�
 | Транзакції на одному з'єднанні | ✅ | `db.tx()` бере client із пулу, `SET LOCAL app.tenant_id`, commit/rollback — інакше RLS-контекст губився б між запитами |
 | DeepSeek-планувальник | ✅ **працює наживо** | реальний виклик: run `run_he74v211j8qyh2uy` → 13 подій, `planner: deepseek`, 3 вузли плану ||
 | CI з кешем | ✅ | postgres service + bootstrap ролей + перевірка `relforcerowsecurity` + npm/next кеші |
-| GitHub-репозиторій | ⛔ **заблоковано** | репо `kvuua-maker/ai-orchestrator` створено (публічний, порожній). Токен має **лише читання**: `git ls-remote` OK, `git push` → 403, secrets API → 403, deploy key API → 403. Потрібен токен із Contents:write + Workflows:write |
+| GitHub-репозиторій + CI | ✅ **зелено** | push у `kvuua-maker/ai-orchestrator` (main), 4/4 jobs success, `DEPLOY_SSH_KEY` у Secrets. `.env` і `.secrets/` не запушені (перевірено: `contents/.env` → 404) |
 
 **Що НЕ вдалося в середовищі:**
 Docker і `apt` недоступні (sandbox), тому Postgres і PgBouncer зібрані/запущені локально з бінарників у `/tmp`
@@ -576,3 +576,19 @@ merge у main
 | P6 Рев'ю | демо-акаунт, метадані, виправлення — 1–3 тижні |
 
 **Що вже зроблено зараз:** 9 архітектурних рішень (ARCHITECTURE §34.3) за 4 дні.
+
+### Тиждень 2 — підсумок
+
+| # | Результат | Доказ |
+|---|---|---|
+| 1 | Postgres 16 + PgBouncer 1.23.1 (transaction) | 25/25 тестів проходять через пулер |
+| 2 | FORCE RLS + роль `aio_app` | 3 тести доводять ізоляцію на рівні БД |
+| 3 | DeepSeek наживо | `planner: "deepseek"`, 3 вузли, 13 подій |
+| 4 | CI на GitHub Actions | run #3 (43280563150): contracts, api+RLS+synthetic, web, deploy — **усі success** |
+
+**Знайдені й виправлені баги цього тижня:**
+1. `withTenant` втрачав RLS-контекст на пулі (BEGIN/SET/COMMIT на різних з'єднаннях) → переписано на `db.tx()` з одним client.
+2. `String.replace("/postgres","/aio")` замінював **ім'я користувача** в URL (`postgres://postgres:postgres@…`) → CI падав з `user "aio"`. Виправлено через `URL.pathname`.
+3. libsodium `from_base64` без `base64_variants.ORIGINAL` — падало на ключі GitHub.
+
+**Відомі обмеження:** `DEPLOY_HOST` порожній (деплой-job коректно пропускається з notice); реального сервера-цілі ще нема.
