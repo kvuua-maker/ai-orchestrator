@@ -93,8 +93,12 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0057 | Autonomy is measured by a 200-domain canary, never declared | Accepted |
 | 0058 | Handoff Protocol: freeze session, human drives it, run resumes | Accepted |
 | 0059 | CAPTCHA solver: max 2 attempts, banned for banks/gov/medical | Accepted |
+| 0060 | Capacity via Little's law; 100 concurrent = 5-6 nodes, not one | Accepted |
+| 0061 | PgBouncer in transaction mode is mandatory from day one | Accepted |
+| 0062 | Artifact is registered in DB only after a complete S3 write | Accepted |
+| 0063 | Migrations: expand→contract, N-1 compatible, PITR marker before deploy | Accepted |
 
-Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §33.1 and a
+Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §34.1 and a
 full argument in the relevant chapter.
 
 ## When to write one
