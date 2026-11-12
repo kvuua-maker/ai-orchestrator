@@ -46,6 +46,7 @@ docs/
 
 ## З чого почати
 
+1. [`PROGRESS.md`](./PROGRESS.md) — план розробки на 16 тижнів, 4 паралельні треки.
 1. [`ARCHITECTURE.md`](./ARCHITECTURE.md) §11 — 12-тижневий план за **$0** і тригери витрат.
 2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) §1.5 — що змінює розширення до Universal RPA Agent.
 3. `docs/adr/` — рішення, по одному на файл, незмінні після прийняття.
