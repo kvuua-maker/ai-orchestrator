@@ -30,7 +30,7 @@ logs/
 tmp/
 .tmp/
 runs/
-artifacts/
+/artifacts/
 screenshots/
 traces/
 downloads/
