@@ -256,7 +256,14 @@ pnpm db:migrate
 3. Підняти `/healthz` і `/v1/runs` (заглушка).
 4. Запустити CI: typecheck + lint + test.
 
-**Блокери поза кодом (зробити цього тижня):** заявка на Google OAuth verification; реєстрація в CPA-мережі; акаунт проксі; ключ DeepSeek ($2).
+**Блокери поза кодом (зробити цього тижня):**
+- [x] Google OAuth-клієнт отримано, пара `client_id`+`client_secret` перевірена — валідна (`scripts/verify-google-oauth.mjs`)
+- [ ] **Додати redirect URIs у Google Console** (зараз `redirect_uri_mismatch`):
+      `http://localhost:3000/api/auth/callback/google` для dev, продакшн-URL — пізніше
+- [ ] Заявка на Google OAuth verification (2–6 тижнів, потрібно до публічного запуску)
+- [ ] Реєстрація в CPA-мережі (1–7 днів модерації)
+- [ ] Акаунт проксі (Webshare free — одразу)
+- [ ] Ключ DeepSeek ($2)
 
 ---
 
