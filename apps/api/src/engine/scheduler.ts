@@ -18,7 +18,8 @@ export class CycleError extends Error {
 export async function runPlan(
   plan: Plan,
   runNode: (node: TaskNode) => Promise<TaskResult>,
-  opts: { concurrency?: number; onSkip?: (node: TaskNode, reason: string) => Promise<void> } = {},
+  opts: { concurrency?: number; onSkip?: (node: TaskNode, reason: string) => Promise<void>;
+          skipDone?: Set<string>; shouldStop?: () => boolean } = {},
 ): Promise<ScheduleResult> {
   const concurrency = Math.max(1, opts.concurrency ?? 3);
   const byId = new Map(plan.nodes.map((n) => [n.id, n]));
@@ -30,7 +31,10 @@ export async function runPlan(
   const total = plan.nodes.length;
   if (total === 0) return { results, completed: [], failed, skipped };
 
+  if (opts.skipDone) for (const id of opts.skipDone) if (byId.has(id)) results.set(id, { status: "success", summary: "already done", artifacts: [], evidence: [], blockers: [], nextHints: [], metrics: { steps: 0, tokens: 0, costUsd: 0, durationMs: 0 } });
+
   for (let guard = 0; guard < total * 4; guard++) {
+    if (opts.shouldStop?.()) break;
     const done = new Set([...results.keys(), ...failed, ...skipped]);
     if (done.size === total) break;
 

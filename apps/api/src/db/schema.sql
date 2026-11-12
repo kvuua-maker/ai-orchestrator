@@ -174,3 +174,22 @@ CREATE TABLE IF NOT EXISTS response_cache (
   expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS response_cache_tenant_idx ON response_cache (tenant_id, expires_at);
+
+-- ── Handoff Protocol (§4.17) ──
+CREATE TABLE IF NOT EXISTS handoffs (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  run_id text NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  task_id text,
+  reason text NOT NULL,
+  question text NOT NULL,
+  options jsonb NOT NULL DEFAULT '[]',
+  status text NOT NULL DEFAULT 'pending',
+  answer text,
+  answer_option text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz,
+  expires_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS handoffs_run_idx ON handoffs (run_id, status);
+CREATE INDEX IF NOT EXISTS handoffs_tenant_idx ON handoffs (tenant_id, status, created_at DESC);

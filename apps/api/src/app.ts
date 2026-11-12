@@ -9,6 +9,8 @@ import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
 import { createRegistry } from "./tools/index.js";
 import { createEmbedder } from "./memory/embedder.js";
+import { getPendingHandoff, listHandoffs, resolveHandoff } from "./engine/handoff.js";
+import { reconcileStalledRuns } from "./engine/recovery.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
 import { cacheGet, cacheSet, cacheKey, cacheStats, cachePurgeExpired } from "./memory/cache.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
@@ -30,7 +32,7 @@ function encryptSecret(plain: string) {
 }
 const mask = (v: string) => (v.length <= 10 ? "•".repeat(v.length) : `${v.slice(0, 4)}${"•".repeat(8)}${v.slice(-4)}`);
 
-export interface AppOptions { db?: Db; logger?: boolean }
+export interface AppOptions { db?: Db; logger?: boolean; engineDeps?: Partial<import("./engine/executor.js").EngineDeps> }
 
 export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance & { db: Db; engine: Engine }> {
   const db = opts.db ?? (await createDb());
@@ -38,7 +40,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   await seed(db);
   const embedder = createEmbedder();
   const registry = createRegistry({ db, embedder });
-  const engine = createEngine(db, { artifacts, registry });
+  const engine = createEngine(db, { artifacts, registry, ...(opts.engineDeps ?? {}) });
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
   const TMP_UPLOADS = join(artifacts.root, "tmp");
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -121,7 +123,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       const run = await getRun(tx, req.params.id);
       if (!run) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "run not found" } });
       const { rows: tasks } = await tx<any>("SELECT id, status, agent, goal, est_cost_usd, started_at, finished_at FROM tasks WHERE run_id=$1 ORDER BY id", [run.id]);
-      return { run: runView(run), tasks: tasks.map((t) => ({ id: t.id, status: t.status, agent: t.agent, goal: t.goal, estCostUsd: Number(t.est_cost_usd), startedAt: t.started_at, finishedAt: t.finished_at })) };
+      const pending = await getPendingHandoff(tx, run.id);
+      return { run: runView(run), handoff: pending, tasks: tasks.map((t) => ({ id: t.id, status: t.status, agent: t.agent, goal: t.goal, estCostUsd: Number(t.est_cost_usd), startedAt: t.started_at, finishedAt: t.finished_at })) };
     });
   });
 
@@ -266,6 +269,53 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       return { ok: false, error: { code: "VALIDATION", retryable: false, message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") } };
     }
     return { ok: true, data: { simulated: true, reason: "no simulate(); input is valid, pure tool would run as-is" }, costMicros: 0, cached: false, dryRun: true, evidence: [], artifacts: [] };
+  });
+
+  // ── Handoff Protocol (§4.17) ──
+  app.get("/v1/handoffs", async (req: any) => {
+    const q = z.object({ status: z.enum(["pending", "resolved", "expired", "cancelled"]).optional(), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(req.query ?? {});
+    const items = await db.tx(req.tenantId, (tx) => listHandoffs(tx, q));
+    return { items, total: items.length, server_time: new Date().toISOString() };
+  });
+
+  app.post("/v1/handoffs/:id/resolve", async (req: any, reply) => {
+    const body = z.object({ answer: z.string().max(4000).optional(), option: z.string().max(64).optional() }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
+    if (!body.data.answer && !body.data.option) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "answer or option required" } });
+
+    const outcome = await db.tx(req.tenantId, async (tx) => {
+      const r = await resolveHandoff(tx, req.params.id, body.data);
+      if (!r.ok) return r;
+      const run = await getRun(tx, r.handoff.run_id);
+      return { ...r, run };
+    });
+    if (!outcome.ok) {
+      const code = outcome.reason === "not_found" ? 404 : 409;
+      return reply.code(code).send({ error: { code: code === 404 ? "NOT_FOUND" : "CONFLICT", message: outcome.reason } });
+    }
+    const run = (outcome as any).run;
+    if (run && run.status === "blocked") {
+      await db.tx(req.tenantId, (tx) => appendEvent(tx, run.id, "handoff.resolved", {
+        handoffId: outcome.handoff.id, option: body.data.option ?? null,
+      }));
+      engine.resume(run.id, req.tenantId);
+    }
+    return { handoff: { id: outcome.handoff.id, status: outcome.handoff.status }, runId: run?.id ?? null, resumed: !!run };
+  });
+
+  app.post("/v1/runs/:id/resume", async (req: any, reply) => {
+    const run = await db.tx(req.tenantId, (tx) => getRun(tx, req.params.id));
+    if (!run) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "run not found" } });
+    if (!["blocked", "stalled", "failed"].includes(run.status)) {
+      return reply.code(409).send({ error: { code: "CONFLICT", message: `cannot resume from ${run.status}` } });
+    }
+    engine.resume(run.id, req.tenantId);
+    return reply.code(202).send({ runId: run.id, resumed: true });
+  });
+
+  app.post("/v1/runs/reconcile", async (req: any) => {
+    const body = z.object({ staleAfterMs: z.number().int().min(1000).optional() }).safeParse(req.body ?? {});
+    return reconcileStalledRuns(db, { staleAfterMs: body.success ? body.data.staleAfterMs : undefined, tenantId: req.tenantId });
   });
 
   // ── memory & RAG (§10) ──

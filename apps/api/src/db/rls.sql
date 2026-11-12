@@ -52,3 +52,12 @@ DO $$ BEGIN
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE handoffs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE handoffs FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON handoffs TO aio_app;
+DO $$ BEGIN
+  CREATE POLICY handoffs_tenant ON handoffs FOR ALL
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
