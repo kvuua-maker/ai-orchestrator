@@ -46,6 +46,7 @@ const secrets = {
   DEPLOY_HOST: process.env.DEPLOY_HOST ?? "",
 };
 for (const [name, value] of Object.entries(secrets)) {
+  if (!value) { console.log(`secret ${name} skipped (empty)`); continue; }
   const r = await call(`/repos/${OWNER}/${REPO}/actions/secrets/${name}`, {
     method: "PUT", body: JSON.stringify({ encrypted_value: enc(value), key_id: key.key_id }),
   });
