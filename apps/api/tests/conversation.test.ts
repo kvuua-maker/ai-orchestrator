@@ -61,16 +61,18 @@ describe("Діалог (стрімінг)", () => {
     await app.close();
   });
 
-  it("нечіткий запит → clarify з варіантами", async () => {
-    planJson = { intent: "clarify", options: ["Сайт постачальника", "Свій кабінет"] };
-    streamText = "Уточніть, будь ласка: який сайт?";
+  it("нечіткий запит → одразу act з припущенням, без допиту", async () => {
+    planJson = { intent: "clarify" };   // модель намагається уточнити — ми це забороняємо
+    streamText = "Беру базовий iPhone 15 і порівнюю ціни. Починаю.";
     const app = await buildApp(); await app.ready();
     const conv = await newConv(app);
     const b = (await app.inject({ method: "POST", url: `/v1/conversations/${conv.id}/messages`, headers: H, payload: { text: "перевір ціни" } })).json();
-    expect(b.intent).toBe("clarify");
-    expect(b.options).toHaveLength(2);
+    expect(b.intent).toBe("act");          // clarify зведено до act
+    expect(b.runId).toMatch(/^run_/);      // задача стартувала одразу
+    expect(b.content).toContain("Починаю");
+    expect(b.options ?? []).toHaveLength(0);
     await app.close();
-  });
+  }, 30_000);
 
   it("задача → план + run + фінальний підсумок у розмові", async () => {
     planJson = { intent: "act", plan: ["відкрити сайт", "витягти текст"] };

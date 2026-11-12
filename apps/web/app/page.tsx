@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Link from "next/link";
-import { api, API, H, STATUS_LABEL } from "./lib";
+import { api, API, H, STATUS_LABEL, TENANT } from "./lib";
 
 type Msg = { id: string; role: "user" | "assistant" | "system"; content: string; run_id?: string | null; meta?: any; created_at: string };
 type Conv = { id: string; title: string; updated_at: string; last_message?: string; messages?: number };
@@ -24,9 +24,12 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState<{ id: string; text: string } | null>(null);
   const [steps, setSteps] = useState<Array<{ label: string; status: string; icon?: string }>>([]);
   const [busyRun, setBusyRun] = useState<string | null>(null);
+  const [runStart, setRunStart] = useState<number | null>(null);
+  const [nowTs, setNowTs] = useState(Date.now());
+  const runSeconds = busyRun && runStart ? Math.max(0, Math.floor((nowTs - runStart) / 1000)) : 0;
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sidebar, setSidebar] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const loadConvs = useCallback(async () => {
@@ -57,55 +60,102 @@ export default function ChatPage() {
     })();
   }, [loadConvs, openConv, newConv]);
 
-  // SSE: підсумки задач приходять сюди
+  // SSE через fetch: EventSource не передає Basic Auth, тому стрім мовчки падав на 401
   useEffect(() => {
     if (!convId) return;
-    esRef.current?.close();
-    const es = new EventSource(`${API}/v1/conversations/${convId}/stream`, {} as any);
-    es.addEventListener("message.created", (e: any) => {
-      const m: Msg = JSON.parse(e.data);
-      setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
-      if (m.role === "assistant") { setBusyRun(null); setThinking(false); }
-    });
-    es.addEventListener("message.start", (e: any) => {
-      const d = JSON.parse(e.data);
-      setThinking(false);
-      setStreaming({ id: d.messageId, text: "" });
-    });
-    es.addEventListener("message.delta", (e: any) => {
-      const d = JSON.parse(e.data);
-      setStreaming((s) => ({ id: d.messageId, text: (s && s.id === d.messageId ? s.text : "") + d.text }));
-    });
-    es.addEventListener("message.done", (e: any) => {
-      const d = JSON.parse(e.data);
-      setStreaming(null);
-      setMsgs((prev) => (prev.some((x) => x.id === d.messageId) ? prev
-        : [...prev, { id: d.messageId, role: "assistant", content: d.content, meta: d.meta, created_at: new Date().toISOString() }]));
-      setBusyRun(null);
-    });
-    es.addEventListener("step", (e: any) => {
-      const d = JSON.parse(e.data);
-      setSteps((prev) => {
-        const next = [...prev];
-        const i = next.findIndex((x) => x.label === d.label);
-        if (i >= 0) next[i] = { label: d.label, status: d.status, icon: d.icon };
-        else next.push({ label: d.label, status: d.status, icon: d.icon });
-        return next;
-      });
-    });
-    es.onerror = () => es.close();
-    esRef.current = es;
-    return () => es.close();
+    const ctrl = new AbortController();
+    let stopped = false;
+    const handle = (type: string, d: any) => {
+      if (type === "message.created") {
+        const m: Msg = d;
+        setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+        setThinking(false);
+        // busyRun НЕ чіпаємо: plan-повідомлення зберігається одразу, а задача ще виконується
+      } else if (type === "message.start") {
+        setThinking(false);
+        setStreaming({ id: d.messageId, text: "" });
+        setSteps((prev) => prev.filter((x) => !x.label.startsWith("Думаю над планом")));
+      } else if (type === "message.delta") {
+        setStreaming((prev) => ({ id: d.messageId, text: (prev && prev.id === d.messageId ? prev.text : "") + d.text }));
+      } else if (type === "message.done") {
+        setStreaming(null);
+        setMsgs((prev) => (prev.some((x) => x.id === d.messageId) ? prev
+          : [...prev, { id: d.messageId, role: "assistant", content: d.content, meta: d.meta, created_at: new Date().toISOString() }]));
+        // завершуємо стан лише коли прийшов ПІДСУМОК задачі, а не план
+        if (d?.meta?.intent === "result") {
+          setBusyRun(null); setRunStart(null);
+          setSteps((prev) => prev.map((x) => x.status === "running" ? { ...x, status: "done", icon: "✓" } : x));
+        }
+      } else if (type === "step") {
+        setSteps((prev) => {
+          const next = [...prev];
+          const i = next.findIndex((x) => x.label.replace(/ · \d+ с$/, "") === d.label.replace(/ · \d+ с$/, ""));
+          if (i >= 0) next[i] = { label: d.label, status: d.status, icon: d.icon };
+          else next.push({ label: d.label, status: d.status, icon: d.icon });
+          return next.slice(-12);
+        });
+      }
+    };
+
+    (async () => {
+      while (!stopped) {
+        try {
+          const res = await fetch(`${API}/v1/conversations/${convId}/stream`, {
+            signal: ctrl.signal, credentials: "same-origin",
+            headers: { accept: "text/event-stream", "x-tenant-id": TENANT },
+          });
+          if (!res.ok || !res.body) { await new Promise((r) => setTimeout(r, 1500)); continue; }
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const parts = buf.split("\n\n");
+            buf = parts.pop() ?? "";
+            for (const part of parts) {
+              const ev = /^event:\s*(.+)$/m.exec(part)?.[1]?.trim();
+              const data = /^data:\s*(.+)$/m.exec(part)?.[1];
+              if (!ev || !data) continue;
+              try { handle(ev, JSON.parse(data)); } catch { /* ignore */ }
+            }
+          }
+        } catch { /* abort або мережа */ }
+        if (!stopped) await new Promise((r) => setTimeout(r, 1500));
+      }
+    })();
+
+    return () => { stopped = true; ctrl.abort(); };
   }, [convId]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, thinking]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, thinking, steps, streaming]);
+
+  // цокання таймера, незалежно від стану задачі
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function stopRun() {
+    if (!busyRun || stopping) return;
+    setStopping(true);
+    try {
+      await api(`/v1/runs/${busyRun}/cancel`, { method: "POST", body: JSON.stringify({ mode: "soft" }) });
+      setSteps((prev) => [...prev, { label: "Зупинено вами", status: "failed", icon: "■" }]);
+      setBusyRun(null); setRunStart(null);
+    } catch (e: any) { setError(e.message); }
+    finally { setStopping(false); }
+  }
 
   async function send(override?: string) {
     const value = (override ?? text).trim();
     if (!value || thinking) return;
     let cid = convId;
     if (!cid) cid = await newConv();
-    setText(""); setError(null); setThinking(true); setSteps([]); setStreaming(null);
+    setText(""); setError(null); setThinking(true); setStreaming(null);
+    setSteps([{ label: "Думаю над планом…", status: "running", icon: "⏳" }]);
+    setRunStart(Date.now());
     const tempUser: Msg = { id: `tmp-${Date.now()}`, role: "user", content: value, created_at: new Date().toISOString() };
     setMsgs((m) => [...m, tempUser]);
     try {
@@ -114,7 +164,7 @@ export default function ChatPage() {
       setMsgs((m) => (m.some((x) => x.id === r.messageId) ? m
         : [...m, { id: r.messageId, role: "assistant", content: r.content, meta: { intent: r.intent, plan: r.plan, options: r.options }, run_id: r.runId, created_at: new Date().toISOString() }]));
       setThinking(false); setStreaming(null);
-      if (r.runId) setBusyRun(r.runId);
+      if (r.runId) setBusyRun(r.runId);   // кроки НЕ чистимо: перші вже могли прийти через SSE
       loadConvs();
     } catch (e: any) {
       setThinking(false);
@@ -131,11 +181,23 @@ export default function ChatPage() {
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>AI Orchestrator</div>
             <div style={{ fontSize: 11, color: "#5f677a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {busyRun ? "виконую задачу…" : "ваш цифровий помічник"}
+              {busyRun ? `${steps.find((x) => x.status === "running")?.label ?? "працюю…"}` : "ваш цифровий помічник"}
             </div>
           </div>
-          <button onClick={newConv} aria-label="Нова розмова"
-            style={{ background: "#4f7cff", border: 0, color: "#fff", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>+ Нова</button>
+          {busyRun ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, color: "#8b93a7", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                ⏱ {String(Math.floor(runSeconds / 60)).padStart(2, "0")}:{String(runSeconds % 60).padStart(2, "0")}
+              </span>
+              <button onClick={stopRun} disabled={stopping} aria-label="Зупинити"
+                style={{ background: "#3a1418", border: "1px solid #7a2730", color: "#ff9b9b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>
+                ■ {stopping ? "…" : "Стоп"}
+              </button>
+            </div>
+          ) : (
+            <button onClick={newConv} aria-label="Нова розмова"
+              style={{ background: "#4f7cff", border: 0, color: "#fff", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>+ Нова</button>
+          )}
         </div>
       </header>
 
@@ -196,7 +258,7 @@ export default function ChatPage() {
             {steps.length > 0 && (
               <div style={{ margin: "2px 0 10px 38px", display: "grid", gap: 4 }}>
                 {steps.map((s, i) => (
-                  <div key={`${s.label}-${i}`} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: s.status === "failed" ? "#ff9b9b" : s.status === "running" ? "#8b93a7" : "#7fc9a6" }}>
+                  <div key={`${s.label}-${i}`} className="step-row" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: s.status === "failed" ? "#ff9b9b" : s.status === "running" ? "#8b93a7" : "#7fc9a6" }}>
                     <span style={{ width: 14, textAlign: "center", flexShrink: 0 }}>{s.icon ?? (s.status === "running" ? "⏳" : "✓")}</span>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
                   </div>
@@ -204,7 +266,11 @@ export default function ChatPage() {
               </div>
             )}
             {busyRun && !thinking && !streaming && (
-              <div style={{ fontSize: 11, color: "#5f677a", margin: "6px 0 0 38px" }}>виконую задачу… результат з'явиться тут</div>
+              <div style={{ margin: "6px 0 0 38px", display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "#5f677a" }}>
+                <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 99, background: "#3ecf8e", animation: "pulse 1.2s infinite" }} />
+                працюю · ⏱ {String(Math.floor(runSeconds / 60)).padStart(2, "0")}:{String(runSeconds % 60).padStart(2, "0")}
+                <style>{`@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}`}</style>
+              </div>
             )}
             <div ref={endRef} />
           </div>
@@ -258,7 +324,7 @@ function Avatar() {
 
 function Bubble({ msg, onPick }: { msg: Msg; onPick: (v: string) => void }) {
   const mine = msg.role === "user";
-  const options: string[] = msg.meta?.options ?? [];
+  const options: string[] = [];   // clarify прибрано: агент не питає дозволу
   const plan: string[] = msg.meta?.plan ?? [];
   return (
     <div className="bubble-row" style={{ flexDirection: mine ? "row-reverse" : "row" }}>

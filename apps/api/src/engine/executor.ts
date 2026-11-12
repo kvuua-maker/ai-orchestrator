@@ -131,10 +131,19 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
         }
 
         await step((q) => appendEvent(q, runId, "tool.called", { taskId: node.id, tool: toolName, args: Object.keys(toolArgs) }));
+
+        // «живий» індикатор: кожні 4 с показуємо, що робота триває
+        const startedAt = Date.now();
+        const beat = setInterval(() => {
+          const sec = Math.round((Date.now() - startedAt) / 1000);
+          publishStep(`${node.goal.slice(0, 60)} · ${sec} с`, "running", "⏳");
+        }, 4000);
+
         const res = await tools.invoke(toolName, toolArgs, {
           tenantId, runId, taskId: node.id, dryRun: run.dry_run,
           budgetUsd: guard.snapshot().remainingUsd, artifacts,
         }, node.agent);
+        clearInterval(beat);
 
         if (res.ok) {
           await step((q) => appendEvent(q, runId, "tool.result", { taskId: node.id, tool: toolName, ok: true, summary: "ok" }));

@@ -6,12 +6,20 @@ export type Intent = "answer" | "clarify" | "act";
 export interface TurnPlan {
   intent: Intent;
   plan?: string[];
-  options?: string[];
+  options?: string[];      // залишено для сумісності, більше не генерується
+  assumptions?: string[];
 }
 
 export interface HistoryItem { role: "user" | "assistant"; content: string }
 
 const RE_FACT_HINT = /мене звати|мене зовут|мій |моя |моє |мої |постачальник|клієнт|працюю з|запам'ятай|наша компанія|наш |наше /i;
+
+const TASK_RE = /https?:\/\/|(перевір|знайди|зроби|порівняй|завантаж|розпізнай|зібери|порахуй|склади|проаналізуй|відкрий|оброби|експортуй|створи|підготуй|надішли|заповни)/i;
+
+/** Очевидна задача — не витрачаємо круг LLM на класифікацію. */
+export function looksLikeTask(text: string): boolean {
+  return TASK_RE.test(text.trim());
+}
 
 /** Фаза 1: швидко визначити намір (маленька відповідь, без тексту). */
 export async function classifyTurn(
@@ -33,11 +41,12 @@ options — лише для clarify: 2–4 конкретні варіанти.`
     maxTokens: 250,
   });
 
-  const intent: Intent = out?.intent === "clarify" || out?.intent === "act" ? out.intent : "answer";
+  // clarify більше не існує: будь-яка нечітка задача стає act із припущенням
+  const intent: Intent = out?.intent === "answer" ? "answer" : "act";
   return {
     intent,
     plan: Array.isArray(out?.plan) ? out!.plan!.map(String).slice(0, 5) : undefined,
-    options: Array.isArray(out?.options) ? out!.options!.map(String).slice(0, 4) : undefined,
+    assumptions: Array.isArray(out?.assumptions) ? out!.assumptions!.map(String).slice(0, 2) : undefined,
   };
 }
 

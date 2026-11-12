@@ -4,7 +4,7 @@ import type { Embedder } from "../memory/embedder.js";
 import { ingestText, searchMemory } from "../memory/store.js";
 import { appendEvent, insertRun } from "../repo/runs.js";
 import { getHistory, addMessage, setTitleIfDefault } from "./store.js";
-import { classifyTurn, extractFacts, streamReply, type TurnPlan } from "./brain.js";
+import { classifyTurn, extractFacts, looksLikeTask, streamReply, type TurnPlan } from "./brain.js";
 import { bus } from "./bus.js";
 
 export interface TurnResult {
@@ -36,7 +36,10 @@ export async function runTurn(
     return h.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "assistant" as const : "user" as const, content: m.content }));
   });
 
-  const plan: TurnPlan = await classifyTurn(llm, { text, history });
+  // швидкий шлях: явна задача стартує без окремого виклику класифікатора
+  const plan: TurnPlan = looksLikeTask(text)
+    ? { intent: "act" }
+    : await classifyTurn(llm, { text, history });
 
   // факти про клієнта → у контекст
   let facts: string[] = [];

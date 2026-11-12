@@ -10,7 +10,7 @@ export const httpFetch = defineTool({
   output: z.object({ status: z.number(), url: z.string(), contentType: z.string().nullable(), bytes: z.number(), text: z.string() }),
   risk: "read", effectClass: "pure", costClass: "free",
   scopes: ["http:read"], agents: ["browser", "data", "verifier", "synthesizer"],
-  timeoutMs: 10_000, maxRetries: 2,
+  timeoutMs: 6_000, maxRetries: 1,
   idempotency: { strategy: "args_hash", ttlSeconds: 300, onConflict: "return_cached" },
   async execute({ url, maxBytes }) {
     try {

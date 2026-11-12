@@ -21,7 +21,7 @@ for (const d of DEVICES) {
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e).slice(0, 100)));
-  await page.goto(URL, { waitUntil: "networkidle" });
+  await page.goto(URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".composer-input", { timeout: 15000 });
 
   // реальне повідомлення → перевіряємо бульбашки і стрім
