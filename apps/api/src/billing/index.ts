@@ -77,7 +77,11 @@ export async function getQuota(q: QueryFn, tenantId: string): Promise<QuotaState
   const usage = await getUsage(q, tenantId);
   if (!sub) {
     const { rows } = await q<Plan>("SELECT * FROM plans WHERE id='free'");
-    const plan = rows[0]!;
+    // якщо плани не засіяні — безпечний дефолт, а не 500
+    const plan: Plan = rows[0] ?? {
+      id: "free", name: "Free", price_usd: "0",
+      monthly_runs: 100, monthly_tokens: 100_000, max_concurrent: 2, overage_per_1k_tokens: "0",
+    };
     const runsRemaining = Math.max(0, plan.monthly_runs - usage.runs);
     const tokensRemaining = Math.max(0, plan.monthly_tokens - usage.tokens);
     return { plan, usage, runsRemaining, tokensRemaining,

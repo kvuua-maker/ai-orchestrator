@@ -26,6 +26,12 @@ const db = new pg.Client({ connectionString: dbUrl.toString() });
 await db.connect();
 await db.query(readFileSync(new URL("../apps/api/src/db/schema.sql", import.meta.url), "utf8"));
 await db.query(readFileSync(new URL("../apps/api/src/db/rls.sql", import.meta.url), "utf8"));
+// плани — обов'язкові для квот; без них subscriptions падає на FK
+await db.query(`INSERT INTO plans (id, name, price_usd, monthly_runs, monthly_tokens, max_concurrent, overage_per_1k_tokens)
+  VALUES ('free','Free',0,100,100000,2,0),
+         ('pro','Pro',29,2000,2000000,4,0.02),
+         ('business','Business',99,10000,10000000,8,0.015)
+  ON CONFLICT (id) DO NOTHING`);
 const appPw = process.env.AIO_APP_PASSWORD;
 if (appPw) await db.query(`ALTER ROLE aio_app WITH PASSWORD ${db.escapeLiteral(appPw)}`);
 const svcPw = process.env.AIO_SVC_PASSWORD;
