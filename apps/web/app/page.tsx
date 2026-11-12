@@ -212,22 +212,39 @@ export default function ChatPage() {
     } catch (e: any) { setError(e.message); }
   }
 
-  function toggleMic() {
-    if (listening) { recRef.current?.stop(); setListening(false); return; }
-    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { setError("Цей браузер не підтримує розпізнавання мовлення. Скористайтесь Chrome або Safari."); return; }
-    const rec = new SR();
-    rec.lang = "uk-UA"; rec.interimResults = true; rec.continuous = false;
-    let base = text;
-    rec.onresult = (e: any) => {
-      let t = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript;
-      setText(fixTranscript((base + " " + t).trim()));
-    };
-    rec.onend = () => setListening(false);
-    rec.onerror = (e: any) => { setListening(false); if (e.error !== "aborted") setError("Не вдалося розпізнати мовлення: " + e.error); };
-    recRef.current = rec; base = text; rec.start(); setListening(true);
+  async function toggleMic() {
+    if (listening) { recRef.current?.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/mp4";
+      const rec = new MediaRecorder(stream, { mimeType: mime });
+      const chunks: BlobPart[] = [];
+      rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setListening(false); setThinking(true);
+        try {
+          const blob = new Blob(chunks, { type: mime.split(";")[0] });
+          const res = await fetch(`${API}/v1/voice/transcribe`, {
+            method: "POST", credentials: "same-origin",
+            headers: { "content-type": blob.type, "x-tenant-id": TENANT },
+            body: blob,
+          });
+          if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error?.message ?? `HTTP ${res.status}`);
+          const data = await res.json();
+          if (data.text) setText((prev) => fixTranscript((prev ? prev + " " : "") + data.text));
+          else setError("Не вдалося розпізнати мовлення — спробуйте ще раз ближче до мікрофона.");
+        } catch (e: any) {
+          setError("Розпізнавання не вдалося: " + e.message);
+        } finally { setThinking(false); }
+      };
+      recRef.current = rec; rec.start(); setListening(true); setError(null);
+    } catch (e: any) {
+      setListening(false);
+      setError("Немає доступу до мікрофона: " + e.message);
+    }
   }
+
 
   async function stopRun() {
     if (!busyRun || stopping) return;

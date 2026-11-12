@@ -20,6 +20,7 @@ import { TRACE_HEADER, isValidTraceId, newTraceId, logLine } from "./observabili
 import { createServiceDb } from "./db/index.js";
 import { runTurn } from "./conversation/turn.js";
 import { buildSuggestions } from "./conversation/proactive.js";
+import { transcribe } from "./voice/whisper.js";
 import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
@@ -56,6 +57,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
   const TMP_UPLOADS = join(artifacts.root, "tmp");
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
+  app.addContentTypeParser(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/m4a"],
+    { parseAs: "buffer" }, (_req, body, done) => done(null, body));
 
   app.decorateRequest("traceId", "");
   app.addHook("onRequest", async (req: any) => {
@@ -434,6 +437,24 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const body = z.object({ title: z.string().max(80).optional() }).safeParse(req.body ?? {});
     const conv = await db.tx(req.tenantId, (q) => createConversation(q, req.tenantId, DEFAULT_USER, body.success ? body.data.title : undefined));
     return reply.code(201).send({ conversation: conv });
+  });
+
+  // ── голос: серверний Whisper (§13.11) ──
+  app.post("/v1/voice/transcribe", async (req: any, reply) => {
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length < 2000) {
+      return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "audio required" } });
+    }
+    try {
+      const lang = String((req.query as any)?.lang ?? "ukrainian");
+      const out = await transcribe(body, String(req.headers["content-type"] ?? "audio/webm"), lang);
+      metrics.inc("aio_stt_requests_total", { ok: "true" });
+      metrics.observe("aio_stt_duration_ms", out.ms);
+      return out;
+    } catch (e: any) {
+      metrics.inc("aio_stt_requests_total", { ok: "false" });
+      return reply.code(500).send({ error: { code: "STT_FAILED", message: String(e.message).slice(0, 200) } });
+    }
   });
 
   app.get("/v1/proactive", async (req: any) => {
