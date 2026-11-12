@@ -34,6 +34,26 @@ Docker і `psql` у середовищі недоступні (sandbox), том�
 **Не зроблено з тижня 1:** RLS-політики створені, але `FORCE ROW LEVEL SECURITY` + окрема роль
 застосунку — тиждень 2. Ізоляція тенантів зараз забезпечена фільтром у репозиторії (тест №9).
 
+## 0.1. Тиждень 2 — стан
+
+| Завдання | Стан | Доказ |
+|---|---|---|
+| Реальний Postgres (не PGlite) | ✅ | PostgreSQL 16 на `127.0.0.1:55432`, кластер у `/tmp/pg`, запуск від `nobody` |
+| PgBouncer (transaction mode) | ✅ | зібрано з сорсів (libevent 2.1.12 + pgbouncer 1.23.1), слухає `:6432`; `SHOW CONFIG → pool_mode=transaction`; **усі 25 тестів проходять через пулер** |
+| FORCE RLS + окрема роль | ✅ | роль `aio_app` (NOBYPASSRLS, не власник); `pg_class.relforcerowsecurity = true` для runs/run_events/tasks/devices/secrets |
+| RLS доведено на рівні БД | ✅ | `apps/api/tests/rls.test.ts`: прямий `SELECT` по id чужого тенанта → 0 рядків; без `app.tenant_id` → 0 рядків; вставка з чужим `tenant_id` → помилка |
+| Транзакції на одному з'єднанні | ✅ | `db.tx()` бере client із пулу, `SET LOCAL app.tenant_id`, commit/rollback — інакше RLS-контекст губився б між запитами |
+| DeepSeek-планувальник | ✅ код / ⛔ ключ | реальний HTTP до `/chat/completions`, JSON-схема, таймаут, fallback на stub; перевірено мок-сервером (4 тести, `plan.created.planner="deepseek"`) |
+| CI з кешем | ✅ | postgres service + bootstrap ролей + перевірка `relforcerowsecurity` + npm/next кеші |
+| GitHub-репозиторій | ⛔ **заблоковано** | токен у `/root/projects/.gh_token` має доступ до 6 наявних репозиторіїв, але **не має права створювати нові** (`403 Resource not accessible`). Потрібен порожній репо або токен із `Administration: write` |
+
+**Що НЕ вдалося в середовищі:**
+Docker і `apt` недоступні (sandbox), тому Postgres і PgBouncer зібрані/запущені локально з бінарників у `/tmp`
+під користувачем `nobody`. Для продакшену є `infra/docker/docker-compose.dev.yml` і `infra/pgbouncer/pgbouncer.ini`.
+
+**DeepSeek:** `DEEPSEEK_API_KEY` у середовищі відсутній. Код готовий: з ключем `planner.name === "deepseek"`,
+без ключа — детермінований stub, і це видно в події `plan.created`. Вартість старту — $2 поповнення (ARCHITECTURE §11.4).
+
 ## 1. Команда і треки
 
 | Трек | Володіє | Основні пакети |

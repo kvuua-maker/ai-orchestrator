@@ -3,6 +3,7 @@ name: CI
 on:
   push: { branches: [main] }
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -10,48 +11,105 @@ concurrency:
 
 env:
   NEXT_TELEMETRY_DISABLED: "1"
-  VAULT_MASTER_KEY: ci-test-key
+  VAULT_MASTER_KEY: ci-test-key-not-secret
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_FUND: "false"
 
 jobs:
   contracts:
-    name: contracts + unit
+    name: contracts + typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - name: Cache build info
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/*.tsbuildinfo
+            packages/shared/dist
+          key: tsbuild-${{ runner.os }}-${{ hashFiles('**/*.ts', '**/tsconfig*.json') }}
+          restore-keys: tsbuild-${{ runner.os }}-
+      - run: npm ci --prefer-offline --no-audit --no-fund
       - run: npm run typecheck
       - run: npx vitest run packages/shared
 
   api:
-    name: api + synthetic tenant
+    name: api + RLS + synthetic
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     needs: contracts
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PG_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      DATABASE_URL: postgres://aio_app@127.0.0.1:5432/aio
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Bootstrap DB (roles + FORCE RLS)
+        run: node scripts/db-bootstrap.mjs
+      - name: Verify FORCE RLS active
+        run: |
+          node -e "
+          import('pg').then(async ({default: pg}) => {
+            const c = new pg.Client({connectionString: process.env.DATABASE_URL});
+            await c.connect();
+            const r = await c.query(\"SELECT relname, relforcerowsecurity FROM pg_class WHERE relname IN ('runs','run_events','tasks','devices','secrets') AND relforcerowsecurity\");
+            console.log('FORCE RLS on:', r.rows.map(x => x.relname).join(','));
+            if (r.rows.length !== 5) { console.error('FORCE RLS missing'); process.exit(1); }
+            await c.end();
+          })"
       - run: npx tsc -b packages/shared apps/api
       - run: npx vitest run apps/api/tests
-        env:
-          NODE_ENV: test
 
   web:
     name: web build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: contracts
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - name: Cache Next.js
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('apps/web/**', 'package-lock.json') }}
+          restore-keys: next-${{ runner.os }}-
+      - run: npm ci --prefer-offline --no-audit --no-fund
       - run: npx next build apps/web
 
-  gate:
-    name: release gate
+  deploy:
+    name: deploy
     runs-on: ubuntu-latest
-    needs: [contracts, api, web]
+    needs: [api, web]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 10
     steps:
-      - run: echo "All required checks passed. Merge allowed."
+      - name: Deploy (disabled until a target host is configured)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::notice::DEPLOY_HOST не заданий — деплой пропущено (секрети готові, цілі ще немає)"
+            exit 0
+          fi
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh "$DEPLOY_HOST" 'cd /srv/ai-orchestrator && git pull --ff-only && npm ci && npm run build && pm2 reload aio || true'

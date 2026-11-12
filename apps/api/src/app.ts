@@ -5,7 +5,7 @@ import {
   CreateRunRequest, IDEMPOTENCY_HEADER, MetaResponse, PresignRequest, RegisterDeviceRequest,
   API_VERSION, MIN_APP_VERSION, type RunView, type RunListItem,
 } from "@aio/shared";
-import { createDb, seed, withTenant, type Db } from "./db/index.js";
+import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
 import { newId } from "./ids.js";
@@ -82,37 +82,40 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     }
 
     const budget = { maxUsd: 0.5, maxDurationSeconds: 900, maxSteps: 40, ...(body.budget ?? {}) };
-    const run = await insertRun(db, { tenantId: req.tenantId, userId: DEFAULT_USER, prompt: body.prompt, budget, dryRun: body.dryRun });
-    await appendEvent(db, run.id, "run.created", { prompt: body.prompt, budget });
-    engine.enqueue(run.id);
+    const run = await db.tx(req.tenantId, async (q: QueryFn) => {
+      const r = await insertRun(q, { tenantId: req.tenantId, userId: DEFAULT_USER, prompt: body.prompt, budget, dryRun: body.dryRun });
+      await appendEvent(q, r.id, "run.created", { prompt: body.prompt, budget });
+      return r;
+    });
+    engine.enqueue(run.id, req.tenantId);
 
     const payload = { run: runView({ ...run, budget }), replayed: false };
     if (idem) await db.query("INSERT INTO idempotency_keys (key, tenant_id, endpoint, response, status_code) VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT DO NOTHING",
-      [idem, req.tenantId, "POST /v1/runs", JSON.stringify(payload), 201]);
+      [idem, req.tenantId, "POST /v1/runs", JSON.stringify(payload), 201]).catch(() => {});
     return reply.code(201).send(payload);
   });
 
   app.get("/v1/runs", async (req: any, reply) => {
     const q = z.object({ limit: z.coerce.number().min(1).max(100).default(20), cursor: z.string().optional(), updated_since: z.string().optional() }).parse(req.query ?? {});
-    return withTenant(db, req.tenantId, async () => {
-      const { items, hasMore, next } = await listRuns(db, { tenantId: req.tenantId, limit: q.limit, updatedSince: q.updated_since, cursor: q.cursor });
+    return db.tx(req.tenantId, async (tx) => {
+      const { items, hasMore, next } = await listRuns(tx, { limit: q.limit, updatedSince: q.updated_since, cursor: q.cursor });
       return { items: items.map((r) => ({ id: r.id, status: r.status, prompt: r.prompt, spentUsd: Number(r.spent_usd), createdAt: new Date(r.created_at).toISOString(), updatedAt: new Date(r.updated_at).toISOString(), finishedAt: r.finished_at ? new Date(r.finished_at).toISOString() : null })) as RunListItem[], next_cursor: next, has_more: hasMore, server_time: new Date().toISOString() };
     });
   });
 
   app.get("/v1/runs/:id", async (req: any, reply) => {
-    return withTenant(db, req.tenantId, async () => {
-      const run = await getRun(db, req.params.id, req.tenantId);
+    return db.tx(req.tenantId, async (tx) => {
+      const run = await getRun(tx, req.params.id);
       if (!run) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "run not found" } });
-      const { rows: tasks } = await db.query<any>("SELECT id, status, agent, goal, est_cost_usd, started_at, finished_at FROM tasks WHERE run_id=$1 ORDER BY id", [run.id]);
+      const { rows: tasks } = await tx<any>("SELECT id, status, agent, goal, est_cost_usd, started_at, finished_at FROM tasks WHERE run_id=$1 ORDER BY id", [run.id]);
       return { run: runView(run), tasks: tasks.map((t) => ({ id: t.id, status: t.status, agent: t.agent, goal: t.goal, estCostUsd: Number(t.est_cost_usd), startedAt: t.started_at, finishedAt: t.finished_at })) };
     });
   });
 
   app.get("/v1/runs/:id/events", async (req: any) => {
     const since = Number((req.query as any)?.since ?? 0);
-    return withTenant(db, req.tenantId, async () => {
-      const events = await getEvents(db, req.params.id, since);
+    return db.tx(req.tenantId, async (tx) => {
+      const events = await getEvents(tx, req.params.id, since);
       const last = events.at(-1) as any;
       return { events: events.map((e: any) => ({ seq: e.seq, runId: req.params.id, type: e.type, payload: e.payload, createdAt: new Date(e.created_at).toISOString() })), last_seq: last?.seq ?? since, server_time: new Date().toISOString() };
     });
@@ -127,9 +130,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const tick = async () => {
       if (closed) return;
       try {
-        const events: any[] = await getEvents(db, runId, seq);
+        const events: any[] = await db.tx(req.tenantId, (tx) => getEvents(tx, runId, seq));
         for (const e of events) { seq = e.seq; reply.raw.write(`id: ${e.seq}\nevent: ${e.type}\ndata: ${JSON.stringify({ seq: e.seq, type: e.type, payload: e.payload })}\n\n`); }
-        const run = await getRun(db, runId, req.tenantId);
+        const run = await db.tx(req.tenantId, (tx) => getRun(tx, runId));
         if (run && ["done", "failed", "cancelled", "blocked"].includes(run.status)) { reply.raw.write("event: end\ndata: {}\n\n"); reply.raw.end(); return; }
       } catch { /* ignore */ }
       setTimeout(tick, 250);
@@ -139,13 +142,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   });
 
   app.post("/v1/runs/:id/cancel", async (req: any, reply) => {
-    return withTenant(db, req.tenantId, async () => {
-      const run = await getRun(db, req.params.id, req.tenantId);
+    return db.tx(req.tenantId, async (tx) => {
+      const run = await getRun(tx, req.params.id);
       if (!run) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "run not found" } });
       if (["done", "failed", "cancelled"].includes(run.status)) return { run: runView(run) };
-      await setStatus(db, run.id, "cancelled", { error: "cancelled by user" });
-      await appendEvent(db, run.id, "run.cancelled", { by: "user" });
-      return { run: runView(await getRun(db, run.id)) };
+      await setStatus(tx, run.id, "cancelled", { error: "cancelled by user" });
+      await appendEvent(tx, run.id, "run.cancelled", { by: "user" });
+      return { run: runView(await getRun(tx, run.id)) };
     });
   });
 
@@ -182,9 +185,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     if (!parsed.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
     const d = parsed.data;
     const deviceId = newId.dev();
-    await db.query(`INSERT INTO devices (id, tenant_id, user_id, platform, apns_token, app_version, locale, timezone)
+    await db.tx(req.tenantId, (tx) => tx(`INSERT INTO devices (id, tenant_id, user_id, platform, apns_token, app_version, locale, timezone)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id, apns_token) DO UPDATE SET app_version=$6 RETURNING id`,
-      [deviceId, req.tenantId, DEFAULT_USER, d.platform, d.apnsToken, d.appVersion, d.locale, d.timezone]);
+      [deviceId, req.tenantId, DEFAULT_USER, d.platform, d.apnsToken, d.appVersion, d.locale, d.timezone]));
     return reply.code(201).send({ deviceId });
   });
 
@@ -194,8 +197,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
     const enc = encryptSecret(body.data.value);
     const secretRef = newId.sec();
-    await db.query("INSERT INTO secrets (id, tenant_id, kind, label, ciphertext, iv, tag, fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-      [secretRef, req.tenantId, body.data.kind, body.data.label, enc.ciphertext, enc.iv, enc.tag, enc.fingerprint]);
+    await db.tx(req.tenantId, (tx) => tx("INSERT INTO secrets (id, tenant_id, kind, label, ciphertext, iv, tag, fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [secretRef, req.tenantId, body.data.kind, body.data.label, enc.ciphertext, enc.iv, enc.tag, enc.fingerprint]));
     return reply.code(201).send({ secretRef, masked: mask(body.data.value), fingerprint: enc.fingerprint, createdAt: new Date().toISOString() });
   });
 

@@ -4,8 +4,13 @@
   "private": true,
   "description": "Universal RPA Agent SaaS: chat in, plan and execution out — browser, code, shell, CRM, social, scraping.",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.0.0" },
-  "workspaces": ["apps/*", "packages/*"],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace @aio/api",
     "dev:web": "npm run dev --workspace @aio/web",
@@ -16,9 +21,12 @@
     "db:migrate": "npm run db:migrate --workspace @aio/api"
   },
   "devDependencies": {
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
+    "@types/libsodium-wrappers": "^0.7.14",
+    "@types/node": "^22.10.2",
+    "embedded-postgres": "^18.6.0-beta.19",
+    "libsodium-wrappers": "^0.8.4",
     "tsx": "^4.19.2",
-    "@types/node": "^22.10.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
