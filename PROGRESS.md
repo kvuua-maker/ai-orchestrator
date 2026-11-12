@@ -9,6 +9,31 @@
 **Платформа:** веб-перший (§1.8). PWA — опційно. Нативний iOS — **Phase 2**, після релізу (§34);
 але 4 дні API-ready робимо зараз, у тижнях 1–3, щоб потім не переписувати.
 
+## 0. Стан виконання
+
+**Тиждень 1 (P0 Каркас) — завершено.**
+
+| Крок | Що зроблено | Тести |
+|---|---|---|
+| 1 | Монорепо на npm workspaces, `tsconfig` project references | `tsc -b` зелений |
+| 2 | **Контракти** `@aio/shared`: GoalSpec, Plan, TaskNode, TaskResult, RunEvent, ToolDefinition, API-схеми (runs/uploads/devices/token/secret/meta) | 6 unit |
+| 3 | **API** Fastify: `/healthz`, `/readyz`, `/v1/meta`, runs CRUD, events, SSE, cancel, presign/complete, devices, secrets (AES-256-GCM) | — |
+| 4 | **Ходячий скелет**: планувальник-заглушка → executor → `http.fetch` → події → результат | 10 synthetic |
+| 5 | **Веб** Next.js 15: чат + SSE-timeline, `/v1/meta` у шапці | `next build` + HTTP 200 |
+| 6 | **CI** GitHub Actions: contracts → api+synthetic → web build → gate | — |
+
+**Перевірено реальним HTTP (не лише inject):**
+`POST /v1/runs` → `plan.created` → `tool.result` (example.com, 200) → `run.completed` — 9 подій
+у правильному порядку; повтор із тим самим `Idempotency-Key` → той самий `runId`, `replayed: true`.
+
+**Відхилення від плану (зафіксовано):**
+Docker і `psql` у середовищі недоступні (sandbox), тому Postgres піднято через **PGlite**
+(справжній Postgres у WASM). Гілка `pg` для продакшену (`DATABASE_URL`) написана, але ще не
+перевірена — перевіряємо на тижні 2 разом із PgBouncer.
+
+**Не зроблено з тижня 1:** RLS-політики створені, але `FORCE ROW LEVEL SECURITY` + окрема роль
+застосунку — тиждень 2. Ізоляція тенантів зараз забезпечена фільтром у репозиторії (тест №9).
+
 ## 1. Команда і треки
 
 | Трек | Володіє | Основні пакети |

@@ -58,3 +58,9 @@ coverage/
 .nyc_output/
 playwright-report/
 test-results/
+
+# local tooling cache (sandbox-friendly)
+.npm-cache/
+apps/web/.next/
+apps/web/next-env.d.ts
+*.tsbuildinfo

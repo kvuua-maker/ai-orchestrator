@@ -4,24 +4,21 @@
   "private": true,
   "description": "Universal RPA Agent SaaS: chat in, plan and execution out — browser, code, shell, CRM, social, scraping.",
   "license": "UNLICENSED",
-  "engines": {
-    "node": ">=22.0.0",
-    "pnpm": ">=9.0.0"
-  },
-  "packageManager": "pnpm@9.12.0",
+  "engines": { "node": ">=22.0.0" },
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "echo \"wire up after milestone 2\" && exit 0",
-    "build": "echo \"wire up after milestone 2\" && exit 0",
-    "lint": "echo \"wire up after milestone 2\" && exit 0",
-    "test": "echo \"wire up after milestone 2\" && exit 0",
-    "typecheck": "echo \"wire up after milestone 2\" && exit 0",
-    "db:up": "docker compose -f infra/docker/docker-compose.dev.yml up -d",
-    "db:down": "docker compose -f infra/docker/docker-compose.dev.yml down"
+    "dev": "npm run dev --workspace @aio/api",
+    "dev:web": "npm run dev --workspace @aio/web",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "npm run db:migrate --workspace @aio/api"
   },
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
-  "devDependencies": {},
-  "dependencies": {}
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.10.2"
+  }
 }
