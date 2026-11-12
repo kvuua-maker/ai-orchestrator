@@ -38,7 +38,7 @@ execSync("git push -u origin main --force", { stdio: "inherit" });
 const { body: key } = await call(`/repos/${OWNER}/${REPO}/actions/secrets/public-key`);
 await sodium.ready;
 const enc = (v) => sodium.to_base64(
-  sodium.crypto_box_seal(sodium.from_string(v), sodium.from_base64(key.key)),
+  sodium.crypto_box_seal(sodium.from_string(v), sodium.from_base64(key.key, sodium.base64_variants.ORIGINAL)),
   sodium.base64_variants.ORIGINAL,
 );
 const secrets = {
