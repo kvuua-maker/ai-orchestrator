@@ -76,7 +76,7 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0040 | Proactive suggestions: ≤1/week, opt-in, no finance categories | Accepted |
 | 0041 | Secrets: AES-256-GCM + AAD, KEK in KMS, per-tenant DEK, 15-min cache | Accepted |
 | 0042 | `[SECRET_INJECTED]` as mandatory marker in all logs and events | Accepted |
-| 0043 | Chat secret detector blocks LLM send, offers save-and-purge | Accepted |
+| 0043 | Chat secret detector blocks LLM send; no bypass path, save-and-purge only | Accepted |
 | 0044 | Set & Forget: no preventive rotation, react only to real failures | Accepted |
 
 Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §31.1 and a
