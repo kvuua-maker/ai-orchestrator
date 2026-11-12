@@ -10,12 +10,13 @@
     "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
+    "@aio/documents": "0.1.0",
     "@aio/shared": "0.1.0",
     "@electric-sql/pglite": "^0.2.17",
     "@types/pg": "^8.23.1",
     "fastify": "^5.2.1",
     "pg": "^8.23.1",
     "zod": "^3.24.1",
-    "@aio/documents": "0.1.0"
+    "zod-to-json-schema": "^3.25.2"
   }
 }

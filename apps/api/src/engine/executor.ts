@@ -2,6 +2,7 @@ import type { GoalSpec, Plan, TaskNode, TaskResult } from "@aio/shared";
 import type { Db, QueryFn } from "../db/index.js";
 import { appendEvent, getRun, insertTasks, setStatus, updateTask } from "../repo/runs.js";
 import { registry as defaultRegistry, type ToolRegistry } from "../tools/index.js";
+import type { ArtifactStore } from "../artifacts/store.js";
 import { BudgetExceeded, BudgetGuard } from "./budget.js";
 import { createLlm, type LlmClient } from "./llm.js";
 import { createPlanner } from "./planner.js";
@@ -17,6 +18,7 @@ export interface EngineDeps {
   llm?: LlmClient;
   registry?: ToolRegistry;
   concurrency?: number;
+  artifacts?: ArtifactStore;
 }
 
 const URL_RE = /https?:\/\/[^\s)]+/;
@@ -27,6 +29,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
   const router = createRouter(llm);
   const planner = createPlanner(llm, tools.list().map((t) => t.name));
   const concurrency = deps.concurrency ?? 3;
+  const artifacts = deps.artifacts;
   const pending: Promise<void>[] = [];
 
   async function execute(runId: string, tenantId: string) {
@@ -78,7 +81,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
         const url = node.goal.match(URL_RE)?.[0] ?? run.prompt.match(URL_RE)?.[0] ?? "";
         await step((q) => appendEvent(q, runId, "tool.called", { taskId: node.id, tool: toolName, args: { url } }));
         const res = await tools.invoke(toolName, { url }, {
-          tenantId, runId, taskId: node.id, dryRun: run.dry_run, budgetUsd: guard.snapshot().remainingUsd,
+          tenantId, runId, taskId: node.id, dryRun: run.dry_run, budgetUsd: guard.snapshot().remainingUsd, artifacts,
         }, node.agent);
         await step((q) => appendEvent(q, runId, "tool.result", {
           taskId: node.id, tool: toolName, ok: res.ok,

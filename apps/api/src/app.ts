@@ -7,6 +7,7 @@ import {
 } from "@aio/shared";
 import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
+import { registry } from "./tools/index.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
 import { newId } from "./ids.js";
 import { createArtifactStore } from "./artifacts/store.js";
@@ -30,10 +31,10 @@ export interface AppOptions { db?: Db; logger?: boolean }
 
 export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance & { db: Db; engine: Engine }> {
   const db = opts.db ?? (await createDb());
-  await seed(db);
-  const engine = createEngine(db);
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
   const artifacts = createArtifactStore();
+  await seed(db);
+  const engine = createEngine(db, { artifacts });
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
   const TMP_UPLOADS = join(artifacts.root, "tmp");
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
 
@@ -222,6 +223,44 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "artifact not found" } });
     const bytes = await artifacts.get(key);
     return reply.header("content-type", rows[0].mime).header("content-length", bytes.length).send(bytes);
+  });
+
+  // ── tool catalog (§3.2.2) ──
+  app.get("/v1/tools", async (req: any) => {
+    const q = z.object({ q: z.string().optional(), agent: z.string().optional(), risk: z.string().optional() }).parse(req.query ?? {});
+    const items = registry.catalog(q);
+    return { items, total: items.length, server_time: new Date().toISOString() };
+  });
+
+  app.get("/v1/tools/:name", async (req: any, reply) => {
+    const versions = registry.versions(req.params.name);
+    if (!versions.length) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "tool not found" } });
+    const tool = registry.resolve(req.params.name, (req.query as any)?.version ?? "*");
+    return {
+      name: tool.definition.name,
+      latest: versions.at(-1),
+      versions,
+      definition: tool.definition,
+      deprecated: tool.deprecated ?? null,
+    };
+  });
+
+  app.post("/v1/tools/:name/simulate", async (req: any, reply) => {
+    const body = z.object({ args: z.record(z.any()).default({}), version: z.string().optional(), agent: z.string().default("synthesizer") }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
+    const tool = registry.has(req.params.name) ? registry.resolve(req.params.name, body.data.version ?? "*") : null;
+    if (!tool) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "tool not found" } });
+    const ctx = { tenantId: req.tenantId, runId: "sim", taskId: "sim", dryRun: true, budgetUsd: 1, artifacts };
+    const policy = registry.checkPolicy(tool, ctx, body.data.agent);
+    if (!policy.ok) return reply.code(403).send({ error: { code: "POLICY_DENIED", message: policy.reason } });
+    if (tool.simulate) return tool.simulate(body.data.args, ctx);
+
+    // Немає simulate(): все одно валідуємо вхід, щоб dry-run не брехав
+    const parsed = tool.inputZod.safeParse(body.data.args);
+    if (!parsed.success) {
+      return { ok: false, error: { code: "VALIDATION", retryable: false, message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") } };
+    }
+    return { ok: true, data: { simulated: true, reason: "no simulate(); input is valid, pure tool would run as-is" }, costMicros: 0, cached: false, dryRun: true, evidence: [], artifacts: [] };
   });
 
   // ── documents pipeline (§13) ──
