@@ -43,16 +43,16 @@ Docker і `psql` у середовищі недоступні (sandbox), том�
 | FORCE RLS + окрема роль | ✅ | роль `aio_app` (NOBYPASSRLS, не власник); `pg_class.relforcerowsecurity = true` для runs/run_events/tasks/devices/secrets |
 | RLS доведено на рівні БД | ✅ | `apps/api/tests/rls.test.ts`: прямий `SELECT` по id чужого тенанта → 0 рядків; без `app.tenant_id` → 0 рядків; вставка з чужим `tenant_id` → помилка |
 | Транзакції на одному з'єднанні | ✅ | `db.tx()` бере client із пулу, `SET LOCAL app.tenant_id`, commit/rollback — інакше RLS-контекст губився б між запитами |
-| DeepSeek-планувальник | ✅ код / ⛔ ключ | реальний HTTP до `/chat/completions`, JSON-схема, таймаут, fallback на stub; перевірено мок-сервером (4 тести, `plan.created.planner="deepseek"`) |
+| DeepSeek-планувальник | ✅ **працює наживо** | реальний виклик: run `run_he74v211j8qyh2uy` → 13 подій, `planner: deepseek`, 3 вузли плану ||
 | CI з кешем | ✅ | postgres service + bootstrap ролей + перевірка `relforcerowsecurity` + npm/next кеші |
-| GitHub-репозиторій | ⛔ **заблоковано** | токен у `/root/projects/.gh_token` має доступ до 6 наявних репозиторіїв, але **не має права створювати нові** (`403 Resource not accessible`). Потрібен порожній репо або токен із `Administration: write` |
+| GitHub-репозиторій | ⛔ **заблоковано** | репо `kvuua-maker/ai-orchestrator` створено (публічний, порожній). Токен має **лише читання**: `git ls-remote` OK, `git push` → 403, secrets API → 403, deploy key API → 403. Потрібен токен із Contents:write + Workflows:write |
 
 **Що НЕ вдалося в середовищі:**
 Docker і `apt` недоступні (sandbox), тому Postgres і PgBouncer зібрані/запущені локально з бінарників у `/tmp`
 під користувачем `nobody`. Для продакшену є `infra/docker/docker-compose.dev.yml` і `infra/pgbouncer/pgbouncer.ini`.
 
-**DeepSeek:** `DEEPSEEK_API_KEY` у середовищі відсутній. Код готовий: з ключем `planner.name === "deepseek"`,
-без ключа — детермінований stub, і це видно в події `plan.created`. Вартість старту — $2 поповнення (ARCHITECTURE §11.4).
+**DeepSeek:** ключ додано в `.env` (gitignored, chmod 600). Перевірено: прямий виклик API → 200,
+через застосунок → `plan.created.planner = "deepseek"`, 3 вузли. Без ключа — stub (видно в події).
 
 ## 1. Команда і треки
 
