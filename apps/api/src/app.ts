@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import cors from "@fastify/cors";
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
@@ -67,6 +68,23 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     req.log.info(logLine(reply.statusCode >= 500 ? "error" : "info", "request.end", {
       traceId: req.traceId, method: req.method, route, status: reply.statusCode, ms,
     }));
+  });
+
+  // Браузер з іншого origin: без цього UI з :3000 не міг звертатись до :4000 взагалі
+  const allowedOrigins = (process.env.WEB_ORIGIN ?? "http://localhost:3000,http://127.0.0.1:3000")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  await app.register(cors, {
+    origin: (origin, cb) => {
+      // Відмова без CORS-заголовків: браузер заблокує запит, а сервер не віддасть 500
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      metrics.inc("aio_cors_denied_total", { origin: origin.slice(0, 60) });
+      cb(null, false);
+    },
+    credentials: false,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["content-type", "authorization", "x-tenant-id", "idempotency-key", "x-trace-id"],
+    exposedHeaders: ["x-trace-id", "x-cache"],
+    maxAge: 600,
   });
 
   app.decorate("db", db);

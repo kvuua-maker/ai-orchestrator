@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Shell, Card, ErrorNote, Skeleton } from "../components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const H = { "x-tenant-id": "tnt_demo0001" };
@@ -16,10 +17,10 @@ type Summary = {
   process: { counters: Record<string, number>; histograms: Array<{ name: string; count: number; p50: number; p95: number; p99: number }> };
 };
 
-const Card = ({ label, value, hint }: { label: string; value: string | number; hint?: string }) => (
+const Tile = ({ label, value, hint }: { label: string; value: string | number; hint?: string }) => (
   <div style={{ padding: 16, borderRadius: 10, background: "#12151d", border: "1px solid #232838" }}>
-    <div style={{ fontSize: 12, color: "#8b93a7" }}>{label}</div>
-    <div style={{ fontSize: 26, fontWeight: 600, marginTop: 6 }}>{value}</div>
+    <div style={{ fontSize: 11, color: "#8b93a7", textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
+    <div style={{ fontSize: 24, fontWeight: 620, marginTop: 6 }}>{value}</div>
     {hint && <div style={{ fontSize: 11, color: "#5f677a", marginTop: 4 }}>{hint}</div>}
   </div>
 );
@@ -34,19 +35,19 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <main style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}>
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>Observability</h1>
-      <p style={{ color: "#8b93a7", fontSize: 13, marginTop: 0 }}>останні {s?.window_hours ?? 24} годин</p>
-      {err && <p style={{ color: "#ff6b6b" }}>{err}</p>}
-      {!s && !err && <p style={{ color: "#8b93a7" }}>завантаження…</p>}
+    <Shell>
+      <h1 style={{ fontSize: 20, margin: "0 0 4px" }}>Метрики</h1>
+      <p style={{ color: "#8b93a7", fontSize: 12, marginTop: 0 }}>останні {s?.window_hours ?? 24} годин</p>
+      {err && <ErrorNote text={err} />}
+      {!s && !err && <Skeleton rows={3} />}
       {s && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: 16 }}>
-            <Card label="Успішність" value={`${s.success_rate}%`} hint={`${s.runs.done} з ${s.runs.total}`} />
-            <Card label="runs" value={s.runs.total} hint={`failed: ${s.runs.failed}`} />
-            <Card label="p50 / p95" value={`${s.duration_ms.p50} / ${s.duration_ms.p95} мс`} />
-            <Card label="Витрати" value={`$${s.cost_usd.toFixed(4)}`} />
-            <Card label="Handoff" value={s.handoffs.pending} hint={`resolve: ${s.handoffs.resolved}`} />
+            <Tile label="Успішність" value={`${s.success_rate}%`} hint={`${s.runs.done} з ${s.runs.total}`} />
+            <Tile label="runs" value={s.runs.total} hint={`failed: ${s.runs.failed}`} />
+            <Tile label="p50 / p95" value={`${s.duration_ms.p50} / ${s.duration_ms.p95} мс`} />
+            <Tile label="Витрати" value={`$${s.cost_usd.toFixed(4)}`} />
+            <Tile label="Handoff" value={s.handoffs.pending} hint={`resolve: ${s.handoffs.resolved}`} />
           </div>
 
           <h2 style={{ fontSize: 16, marginTop: 28 }}>Статуси</h2>
@@ -76,6 +77,6 @@ export default function Dashboard() {
           </pre>
         </>
       )}
-    </main>
+    </Shell>
   );
 }
