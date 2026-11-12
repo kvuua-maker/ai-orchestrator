@@ -104,3 +104,14 @@ DO $$ DECLARE t text; BEGIN
     EXCEPTION WHEN duplicate_object THEN NULL; END;
   END LOOP;
 END $$;
+
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY; ALTER TABLE conversations FORCE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY; ALTER TABLE messages FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON conversations, messages TO aio_app;
+DO $$ DECLARE t text; BEGIN
+  FOREACH t IN ARRAY ARRAY['conversations','messages'] LOOP
+    BEGIN
+      EXECUTE format('CREATE POLICY %I_tenant ON %I FOR ALL USING (tenant_id = current_setting(''app.tenant_id'', true)) WITH CHECK (tenant_id = current_setting(''app.tenant_id'', true))', t, t);
+    EXCEPTION WHEN duplicate_object THEN NULL; END;
+  END LOOP;
+END $$;

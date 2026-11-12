@@ -5,4 +5,4 @@ export function id(prefix: string): string {
   for (const b of bytes) s += ALPHABET[b % 36];
   return `${prefix}_${s}`;
 }
-export const newId = { run: () => id("run"), task: () => id("tsk"), tenant: () => id("tnt"), file: () => id("fil"), dev: () => id("dev"), sec: () => id("sec"), up: () => id("upl"), inv: () => id("inv") };
+export const newId = { run: () => id("run"), task: () => id("tsk"), tenant: () => id("tnt"), file: () => id("fil"), dev: () => id("dev"), sec: () => id("sec"), conv: () => id("cnv"), msg: () => id("msg"), up: () => id("upl"), inv: () => id("inv") };

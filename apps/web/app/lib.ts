@@ -1,4 +1,5 @@
-export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+// порожньо = той самий origin; Next проксіює /v1 на API (див. next.config.mjs)
+export const API = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const TENANT = process.env.NEXT_PUBLIC_TENANT ?? "tnt_demo0001";
 
 export const H = { "content-type": "application/json", "x-tenant-id": TENANT };

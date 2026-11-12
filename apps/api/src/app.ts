@@ -8,6 +8,7 @@ import {
 } from "@aio/shared";
 import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
+import { createLlm } from "./engine/llm.js";
 import { createRegistry } from "./tools/index.js";
 import { createEmbedder } from "./memory/embedder.js";
 import { getPendingHandoff, listHandoffs, resolveHandoff } from "./engine/handoff.js";
@@ -16,6 +17,8 @@ import { metrics } from "./observability/metrics.js";
 import { writeAudit, listAudit } from "./observability/audit.js";
 import { TRACE_HEADER, isValidTraceId, newTraceId, logLine } from "./observability/trace.js";
 import { createServiceDb } from "./db/index.js";
+import { runTurn } from "./conversation/turn.js";
+import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
 import { cacheGet, cacheSet, cacheKey, cacheStats, cachePurgeExpired } from "./memory/cache.js";
@@ -45,6 +48,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   const artifacts = createArtifactStore();
   await seed(db);
   const embedder = createEmbedder();
+  const llm = createLlm();
   const registry = createRegistry({ db, embedder });
   const engine = createEngine(db, { artifacts, registry, ...(opts.engineDeps ?? {}) });
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
@@ -421,6 +425,73 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const q = z.object({ action: z.string().optional(), resourceId: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query ?? {});
     const items = await db.tx(req.tenantId, (tx) => listAudit(tx, q));
     return { items, total: items.length, server_time: new Date().toISOString() };
+  });
+
+  // ── Діалог (§10.8) ──
+  app.post("/v1/conversations", async (req: any, reply) => {
+    const body = z.object({ title: z.string().max(80).optional() }).safeParse(req.body ?? {});
+    const conv = await db.tx(req.tenantId, (q) => createConversation(q, req.tenantId, DEFAULT_USER, body.success ? body.data.title : undefined));
+    return reply.code(201).send({ conversation: conv });
+  });
+
+  app.get("/v1/conversations", async (req: any) => {
+    const items = await db.tx(req.tenantId, (q) => listConversations(q));
+    return { items, server_time: new Date().toISOString() };
+  });
+
+  app.get("/v1/conversations/:id", async (req: any, reply) => {
+    const out = await db.tx(req.tenantId, async (q) => {
+      const conv = await getConversation(q, req.params.id);
+      if (!conv) return null;
+      const messages = await getHistory(q, conv.id, 100);
+      return { conversation: conv, messages };
+    });
+    if (!out) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "conversation not found" } });
+    return out;
+  });
+
+  app.post("/v1/conversations/:id/messages", async (req: any, reply) => {
+    const body = z.object({ text: z.string().min(1).max(8000) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "text required" } });
+
+    const quota = await db.tx(req.tenantId, (q) => getQuota(q, req.tenantId));
+    if (!quota.allowed) return reply.code(402).send({ error: { code: "QUOTA_EXCEEDED", message: `квоту вичерпано: ${quota.reason}` } });
+
+    const conv = await db.tx(req.tenantId, (q) => getConversation(q, req.params.id));
+    if (!conv) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "conversation not found" } });
+
+    const result = await runTurn(db, llm, engine, {
+      tenantId: req.tenantId, userId: DEFAULT_USER, conversationId: conv.id, text: body.data.text,
+    });
+    metrics.inc("aio_turns_total", { intent: result.intent });
+    return { ...result, traceId: req.traceId };
+  });
+
+  // SSE: нові повідомлення розмови + події активного запуску
+  app.get("/v1/conversations/:id/stream", async (req: any, reply) => {
+    const convId = req.params.id;
+    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+    let closed = false;
+    req.raw.on("close", () => { closed = true; });
+    let lastMsgAt = new Date(0).toISOString();
+    const send = (event: string, data: unknown) =>
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    const tick = async () => {
+      if (closed) return;
+      try {
+        const { rows } = await db.tx(req.tenantId, (q) => q<any>(
+          `SELECT id, role, content, run_id, meta, created_at FROM messages
+           WHERE conversation_id=$1 AND created_at > $2 ORDER BY created_at ASC LIMIT 20`, [convId, lastMsgAt]));
+        for (const m of rows) {
+          lastMsgAt = new Date(m.created_at).toISOString();
+          send("message.created", m);
+        }
+      } catch { /* ignore */ }
+      setTimeout(tick, 700);
+    };
+    tick();
+    return reply;
   });
 
   // ── Handoff Protocol (§4.17) ──

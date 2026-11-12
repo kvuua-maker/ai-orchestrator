@@ -251,3 +251,26 @@ CREATE TABLE IF NOT EXISTS invoices (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS invoices_tenant_idx ON invoices (tenant_id, created_at DESC);
+
+-- ── Діалог (§10.8) ──
+CREATE TABLE IF NOT EXISTS conversations (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  user_id text NOT NULL,
+  title text NOT NULL DEFAULT 'Нова розмова',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS conversations_tenant_idx ON conversations (tenant_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS messages (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  conversation_id text NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role text NOT NULL,
+  content text NOT NULL,
+  run_id text,
+  meta jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages (conversation_id, created_at);
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS conversation_id text;

@@ -11,6 +11,8 @@ import { createLlm, type LlmClient } from "./llm.js";
 import { createPlanner } from "./planner.js";
 import { createRouter } from "./router.js";
 import { runPlan } from "./scheduler.js";
+import { finalizeReply } from "../conversation/brain.js";
+import { addMessage } from "../conversation/store.js";
 
 export interface Engine {
   enqueue(runId: string, tenantId: string): void;
@@ -235,6 +237,31 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
     });
   }
 
+  /** Після завершення задачі — людський підсумок у ту саму розмову. */
+  async function finalizeConversation(runId: string, tenantId: string) {
+    const run = await db.tx(tenantId, (q) => getRun(q, runId));
+    if (!run || !(run as any).conversation_id) return;
+    const convId = (run as any).conversation_id as string;
+
+    const { rows: tasks } = await db.tx(tenantId, (q) => q<any>(
+      "SELECT status, goal FROM tasks WHERE run_id=$1", [runId]));
+    const result = (run.result ?? {}) as any;
+    const findings: string[] = Array.isArray(result?.data?.findings) ? result.data.findings : [];
+    const handoff = await db.tx(tenantId, (q) => getPendingHandoff(q, runId));
+
+    const reply = await finalizeReply(llm, {
+      request: run.prompt, status: run.status,
+      summary: String(result?.summary ?? ""), findings,
+      handoffQuestion: handoff?.question ?? null,
+    });
+
+    await db.tx(tenantId, (q) => addMessage(q, {
+      tenantId, conversationId: convId, role: "assistant", content: reply, runId,
+      meta: { intent: "result", status: run.status, tasks: tasks.length, handoff: handoff?.id ?? null },
+    }));
+    await db.tx(tenantId, (q) => appendEvent(q, runId, "answer.ready", { conversationId: convId, chars: reply.length })).catch(() => {});
+  }
+
   const launch = (runId: string, tenantId: string, opts: { resume?: boolean } = {}) => {
     const p = execute(runId, tenantId, opts)
       .catch(async (e) => {
@@ -244,6 +271,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           await setStatus(q, runId, "failed", { error: msg }).catch(() => {});
         }).catch(() => {});
       })
+      .then(() => finalizeConversation(runId, tenantId).catch(() => {}))
       .finally(() => { const i = pending.indexOf(p); if (i >= 0) pending.splice(i, 1); });
     pending.push(p);
   };
