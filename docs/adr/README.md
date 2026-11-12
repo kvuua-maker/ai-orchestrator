@@ -78,8 +78,16 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0042 | `[SECRET_INJECTED]` as mandatory marker in all logs and events | Accepted |
 | 0043 | Chat secret detector blocks LLM send; no bypass path, save-and-purge only | Accepted |
 | 0044 | Set & Forget: no preventive rotation, react only to real failures | Accepted |
+| 0045 | Payments: Paddle/Polar (MoR) + LiqPay for UA; ledger is source of truth | Accepted |
+| 0046 | Legal pages are versioned; consent recorded with version and date | Accepted |
+| 0047 | Support button with auto-attached run_id on every error screen | Accepted |
+| 0048 | Media are tools, not core; Midjourney not integrated (no API) | Accepted |
+| 0049 | Voice is input/output, not a separate agent (telephony out of scope) | Accepted |
+| 0050 | File manager as a first-class screen over VFS; file ≠ attachment | Accepted |
+| 0051 | History is conversations/messages, not a list of runs | Accepted |
+| 0052 | Stop has three levels; partial result is always preserved | Accepted |
 
-Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §31.1 and a
+Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §33.1 and a
 full argument in the relevant chapter.
 
 ## When to write one
