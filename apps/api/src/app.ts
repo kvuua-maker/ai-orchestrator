@@ -209,7 +209,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
 
   app.get("/v1/runs/:id/stream", async (req: any, reply) => {
     const runId = req.params.id;
-    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "x-accel-buffering": "no",
+      "content-encoding": "identity",
+      connection: "keep-alive",
+    });
     let seq = Number((req.query as any)?.since ?? 0);
     let closed = false;
     req.raw.on("close", () => { closed = true; });
@@ -519,7 +525,13 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   // SSE: нові повідомлення розмови + події активного запуску
   app.get("/v1/conversations/:id/stream", async (req: any, reply) => {
     const convId = req.params.id;
-    reply.raw.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "x-accel-buffering": "no",
+      "content-encoding": "identity",
+      connection: "keep-alive",
+    });
     let closed = false;
     req.raw.on("close", () => { closed = true; });
     let lastMsgAt = new Date(0).toISOString();

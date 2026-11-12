@@ -58,6 +58,8 @@ export default function ChatPage() {
   const [speakOut, setSpeakOut] = useState(true);
   const [proactive, setProactive] = useState<Array<{ label: string; text: string }>>([]);
   const recRef = useRef<any>(null);
+  const sseAlive = useRef(false);
+  const pollTimer = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [sidebar, setSidebar] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +116,7 @@ export default function ChatPage() {
         setThinking(false);
         // busyRun НЕ чіпаємо: plan-повідомлення зберігається одразу, а задача ще виконується
       } else if (type === "message.start") {
+        sseAlive.current = true;
         setThinking(false);
         setStreaming({ id: d.messageId, text: "" });
         setSteps((prev) => prev.filter((x) => !x.label.startsWith("Думаю над планом")));
@@ -186,6 +189,14 @@ export default function ChatPage() {
       try {
         const d = await api<any>(`/v1/runs/${busyRun}`);
         if (d?.handoff) setHandoff({ id: d.handoff.id, question: d.handoff.question, options: d.handoff.options ?? [] });
+        // кроки з задач (працює й без SSE — через тунель події не доходять)
+        if (!sseAlive.current && Array.isArray(d?.tasks)) {
+          setSteps(d.tasks.map((t: any) => ({
+            label: String(t.goal).slice(0, 70),
+            status: t.status === "done" ? "done" : t.status === "failed" ? "failed" : t.status === "running" ? "running" : "running",
+            icon: t.status === "done" ? "✓" : t.status === "failed" ? "✕" : "⏳",
+          })));
+        }
       } catch { /* ignore */ }
     };
     pull();
@@ -241,7 +252,10 @@ export default function ChatPage() {
       recRef.current = rec; rec.start(); setListening(true); setError(null);
     } catch (e: any) {
       setListening(false);
-      setError("Немає доступу до мікрофона: " + e.message);
+      const insecure = typeof window !== "undefined" && !window.isSecureContext;
+      setError(insecure
+        ? "Мікрофон потребує HTTPS. Відкрийте сайт за адресою https://… (тунель), а не http:// — Safari блокує запис на незахищених сторінках."
+        : "Немає доступу до мікрофона: " + (e?.message ?? "невідома помилка"));
     }
   }
 
@@ -275,6 +289,23 @@ export default function ChatPage() {
       setThinking(false); setStreaming(null);
       if (r.runId) setBusyRun(r.runId);   // кроки НЕ чистимо: перші вже могли прийти через SSE
       loadConvs();
+      // watchdog: SSE через проксі/тунель може не доходити — тоді опитуємо
+      clearTimeout(pollTimer.current);
+      pollTimer.current = setTimeout(async () => {
+        if (sseAlive.current || !cid) return;
+        for (let i = 0; i < 80; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          try {
+            const d = await api<{ messages: Msg[] }>(`/v1/conversations/${cid}`);
+            setMsgs((prev) => {
+              const known = new Set(prev.map((m) => m.id));
+              const fresh = d.messages.filter((m) => !known.has(m.id));
+              return fresh.length ? [...prev, ...fresh] : prev;
+            });
+            if (d.messages.some((m) => m.role === "assistant" && m.meta?.intent === "result")) { setBusyRun(null); setRunStart(null); break; }
+          } catch { /* ignore */ }
+        }
+      }, 3500);
     } catch (e: any) {
       setThinking(false);
       setError(e.status === 402 ? "Квоту вичерпано. Перейдіть на інший тариф на сторінці «Тариф»." : e.message);
