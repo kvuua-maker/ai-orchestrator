@@ -1,7 +1,14 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/shared" },
-    { "path": "apps/api" }
+    {
+      "path": "packages/shared"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "packages/modules/documents"
+    }
   ]
 }

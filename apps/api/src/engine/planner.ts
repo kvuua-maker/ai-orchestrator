@@ -1,28 +1,109 @@
-import type { Plan, TaskNode } from "@aio/shared";
+import type { GoalSpec, Plan, TaskNode } from "@aio/shared";
 import { newId } from "../ids.js";
+import type { LlmClient } from "./llm.js";
 
-/**
- * Заглушка планувальника (§24.3): детермінована, без LLM.
- * Реальний Planner з'явиться на тижні 3.
- */
-export function planFor(prompt: string): Plan {
-  const urlMatch = prompt.match(/https?:\/\/[^\s)]+/);
+const URL_RE = /https?:\/\/[^\s)]+/g;
+
+/** План без LLM: детермінований, завжди валідний DAG. */
+export function heuristicPlan(goal: GoalSpec, prompt: string): Plan {
+  const urls = [...new Set(prompt.match(URL_RE) ?? [])].slice(0, 4);
+  const deliverable = goal.deliverables[0]?.type ?? "message";
   const nodes: TaskNode[] = [];
 
-  if (urlMatch) {
-    nodes.push({
-      id: newId.task(), agent: "browser", goal: `Отримати вміст ${urlMatch[0]}`,
-      tools: ["http.fetch"], dependsOn: [], parallelizable: false, fanOut: 1,
-      acceptanceCriteria: [{ id: "ac1", check: "status < 400", type: "deterministic" }],
-      estCostUsd: 0.001,
-    });
+  if (urls.length) {
+    for (const url of urls) {
+      nodes.push({
+        id: newId.task(), agent: "browser", goal: `Отримати ${url}`,
+        tools: ["http.fetch"], dependsOn: [], parallelizable: true, fanOut: 1,
+        acceptanceCriteria: [{ id: "ac", check: "status < 400", type: "deterministic" }],
+        estCostUsd: 0.001,
+      });
+    }
   }
+
+  const gatherIds = nodes.map((n) => n.id);
   nodes.push({
-    id: newId.task(), agent: "synthesizer", goal: "Сформувати відповідь",
-    tools: [], dependsOn: nodes.map((n) => n.id), parallelizable: false, fanOut: 1,
-    acceptanceCriteria: [{ id: "ac2", check: "non-empty summary", type: "deterministic" }],
+    id: newId.task(), agent: "data", goal: "Проаналізувати зібране",
+    tools: [], dependsOn: gatherIds, parallelizable: false, fanOut: 1,
+    acceptanceCriteria: [{ id: "ac", check: "analysis not empty", type: "deterministic" }],
+    estCostUsd: 0.002,
+  });
+  const analyzeId = nodes.at(-1)!.id;
+
+  nodes.push({
+    id: newId.task(), agent: "writer", goal: `Сформувати ${deliverable}`,
+    tools: [], dependsOn: [analyzeId], parallelizable: false, fanOut: 1,
+    acceptanceCriteria: goal.acceptanceCriteria.slice(0, 2),
     estCostUsd: 0.002,
   });
 
-  return { planId: newId.task(), version: 1, nodes, estimatedTotalUsd: 0.003, criticalPath: nodes.map((n) => n.id) };
+  return {
+    planId: newId.task(), version: 1, nodes,
+    estimatedTotalUsd: nodes.reduce((s, n) => s + n.estCostUsd, 0),
+    criticalPath: nodes.map((n) => n.id),
+  };
+}
+
+const AGENTS = ["browser", "coder", "ops", "writer", "data", "verifier", "synthesizer"] as const;
+
+export function createPlanner(llm: LlmClient, toolNames: string[]) {
+  return {
+    name: llm.name === "none" ? "heuristic" : llm.name,
+    async plan(goal: GoalSpec, prompt: string): Promise<Plan> {
+      const fallback = heuristicPlan(goal, prompt);
+      const out = await llm.json<{ nodes?: any[] }>({
+        system: `Ти — планувальник DAG для RPA-агента. Поверни ЛИШЕ JSON:
+{"nodes":[{"agent":"browser|coder|ops|writer|data|verifier|synthesizer","goal":string,
+"tools":string[],"dependsOn":number[],"estCostUsd":number}]}
+Правила: 1-5 вузлів; dependsOn — індекси попередніх вузлів; tools лише зі списку ${JSON.stringify(toolNames)};
+незалежні вузли не мають залежностей (вони виконуються паралельно); без пояснень.`,
+        user: `Ціль: ${goal.objective}\nDeliverables: ${JSON.stringify(goal.deliverables)}\nЗапит: ${prompt.slice(0, 1500)}`,
+        maxTokens: 900,
+      });
+      if (!Array.isArray(out?.nodes) || !out.nodes.length || out.nodes.length > 8) return fallback;
+
+      const ids: string[] = [];
+      const nodes: TaskNode[] = [];
+      for (const [i, n] of out.nodes.entries()) {
+        const id = newId.task(); ids.push(id);
+        const deps = (Array.isArray(n?.dependsOn) ? n.dependsOn : [])
+          .filter((d: any) => Number.isInteger(d) && d >= 0 && d < i).map((d: number) => ids[d]);
+        nodes.push({
+          id,
+          agent: AGENTS.includes(n?.agent) ? n.agent : "synthesizer",
+          goal: String(n?.goal ?? "крок").slice(0, 300),
+          tools: (Array.isArray(n?.tools) ? n.tools : []).filter((t: any) => toolNames.includes(t)),
+          dependsOn: deps, parallelizable: deps.length === 0, fanOut: 1,
+          acceptanceCriteria: [{ id: "ac", check: "step completed", type: "deterministic" }],
+          estCostUsd: Number.isFinite(n?.estCostUsd) ? Math.max(0, Number(n.estCostUsd)) : 0.001,
+        });
+      }
+      const plan: Plan = {
+        planId: newId.task(), version: 1, nodes,
+        estimatedTotalUsd: nodes.reduce((s, x) => s + x.estCostUsd, 0),
+        criticalPath: nodes.map((x) => x.id),
+      };
+      return isValidDag(plan) ? plan : fallback;
+    },
+  };
+}
+
+/** Kahn: чи це DAG без циклів і з валідними залежностями. */
+export function isValidDag(plan: Plan): boolean {
+  const ids = new Set(plan.nodes.map((n) => n.id));
+  if (ids.size !== plan.nodes.length) return false;
+  for (const n of plan.nodes) if (n.dependsOn.some((d) => !ids.has(d) || d === n.id)) return false;
+  const indeg = new Map(plan.nodes.map((n) => [n.id, n.dependsOn.length]));
+  const queue = plan.nodes.filter((n) => n.dependsOn.length === 0).map((n) => n.id);
+  let seen = 0;
+  while (queue.length) {
+    const id = queue.shift()!; seen++;
+    for (const n of plan.nodes) {
+      if (n.dependsOn.includes(id)) {
+        const d = indeg.get(n.id)! - 1; indeg.set(n.id, d);
+        if (d === 0) queue.push(n.id);
+      }
+    }
+  }
+  return seen === plan.nodes.length;
 }
