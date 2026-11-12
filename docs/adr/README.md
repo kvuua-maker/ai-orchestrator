@@ -57,8 +57,25 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0021 | Account Vault: three-level key hierarchy, write-only secrets | Proposed |
 | 0022 | Telegram: Bot API for outbound, userbot inbound-only | Accepted |
 | 0023 | A module is a tool pack, never its own infrastructure | Accepted |
+| 0024 | Effectively-once: at-least-once + idempotency key + outbox | Accepted |
+| 0025 | Reconciliation as a standard job; CRM is source of truth for leads | Accepted |
+| 0026 | Fencing tokens for run leases | Accepted |
+| 0027 | Content contract per source: distinguish blocked from empty | Accepted |
+| 0028 | Never write unvalidated data to canonical tables | Accepted |
+| 0029 | Big bang = one release, 8 parallel tracks, walking skeleton | Accepted |
+| 0030 | Universality = Zero-Core-Change Test + synthetic domain in CI | Accepted |
+| 0031 | Monetisation is post-processing; never influences selection | Accepted |
+| 0032 | Revenue (`revenue_events`) accounted separately from cost (`usage_events`) | Accepted |
+| 0033 | Data Confirmation — HITL on data, separate from action approval | Accepted |
+| 0034 | Files: virtual filesystem (Postgres + content-addressed S3) | Accepted |
+| 0035 | Reporting via versioned templates, no tax logic in code | Accepted |
+| 0036 | Google Workspace is a P0 launch blocker | Accepted |
+| 0037 | Dry-run mode as a mandatory tool contract | Accepted |
+| 0038 | Onboarding: first result BEFORE connecting accounts | Accepted |
+| 0039 | Error messages carry three parts: what, why, what to do | Accepted |
+| 0040 | Proactive suggestions: ≤1/week, opt-in, no finance categories | Accepted |
 
-Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §18.1 and a
+Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §31.1 and a
 full argument in the relevant chapter.
 
 ## When to write one
