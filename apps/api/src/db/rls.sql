@@ -90,3 +90,16 @@ DO $$ BEGIN
   CREATE POLICY audit_insert ON audit_log FOR INSERT
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY; ALTER TABLE subscriptions FORCE ROW LEVEL SECURITY;
+ALTER TABLE usage_events ENABLE ROW LEVEL SECURITY; ALTER TABLE usage_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY; ALTER TABLE invoices FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON subscriptions, usage_events, invoices TO aio_app;
+GRANT SELECT ON plans TO aio_app;
+DO $$ DECLARE t text; BEGIN
+  FOREACH t IN ARRAY ARRAY['subscriptions','usage_events','invoices'] LOOP
+    BEGIN
+      EXECUTE format('CREATE POLICY %I_tenant ON %I FOR ALL USING (tenant_id = current_setting(''app.tenant_id'', true)) WITH CHECK (tenant_id = current_setting(''app.tenant_id'', true))', t, t);
+    EXCEPTION WHEN duplicate_object THEN NULL; END;
+  END LOOP;
+END $$;

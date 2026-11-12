@@ -121,8 +121,9 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           await step((q) => appendEvent(q, runId, "tool.result", {
             taskId: node.id, tool: toolName, ok: false, summary: res.error.code }));
 
+          // Реєстр уже виконав свої ретраї → для класифікатора спроби вичерпані
           const verdict = classifyFailure({
-            tool: toolName, error: res.error, attempts: 1, maxAttempts: 2, goalText: run.prompt,
+            tool: toolName, error: res.error, attempts: 2, maxAttempts: 2, goalText: run.prompt,
           });
           out.status = "blocked";
           out.summary = `Зупинка: ${verdict.reason}`;
@@ -169,9 +170,11 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
 
     const snap = guard.snapshot();
     const handoff = await step((q) => getPendingHandoff(q, runId));
+    // paused змінюється в колбеку runNode — TS не бачить цього, тому явний тип
+    const pauseVerdict = paused as DeadEndVerdict | null;
 
-    if (handoff || paused) {
-      const verdict = paused ?? { kind: "needs_human" as const, reason: "awaiting_human", message: "очікує рішення" };
+    if (handoff || (pauseVerdict && pauseVerdict.kind !== "dead_end")) {
+      const verdict = pauseVerdict ?? { kind: "needs_human" as const, reason: "awaiting_human", message: "очікує рішення" };
       await step(async (q) => {
         await q("UPDATE runs SET spent_usd=$2 WHERE id=$1", [runId, snap.spentUsd]);
         await appendEvent(q, runId, "run.blocked", { reason: verdict.reason, handoffId: handoff?.id ?? null });
@@ -181,6 +184,16 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           blockers: [verdict.message], nextHints: ["resolve handoff and resume"],
           metrics: { steps: plan.nodes.length, tokens: 0, costUsd: snap.spentUsd, durationMs: 0 },
         } as TaskResult });
+      });
+      return;
+    }
+
+    if (pauseVerdict) {
+      const v = pauseVerdict;
+      await step(async (q) => {
+        await q("UPDATE runs SET spent_usd=$2 WHERE id=$1", [runId, snap.spentUsd]);
+        await appendEvent(q, runId, "run.failed", { reason: v.reason, message: v.message });
+        await setStatus(q, runId, "failed", { error: `${v.reason}: ${v.message}` });
       });
       return;
     }

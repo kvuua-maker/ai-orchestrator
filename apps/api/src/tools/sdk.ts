@@ -3,6 +3,13 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { ToolDefinition, ToolResult, EffectClass } from "@aio/shared";
 import type { ArtifactStore } from "../artifacts/store.js";
 
+export class ToolFailure extends Error {
+  constructor(readonly code: "VALIDATION" | "NOT_FOUND" | "POLICY_DENIED" | "UPSTREAM_ERROR" | "BLOCKED" | "TIMEOUT" | "AUTH" | "RATE_LIMIT" | "SANDBOX_ERROR" | "DRY_RUN_UNSUPPORTED",
+    message: string, readonly retryable = false) {
+    super(message); this.name = "ToolFailure";
+  }
+}
+
 export interface ToolContext {
   tenantId: string;
   runId: string;
@@ -99,6 +106,9 @@ export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(spec:
           artifacts: payload.artifacts ?? [],
         };
       } catch (e) {
+        if (e instanceof ToolFailure) {
+          return { ok: false, error: { code: e.code, retryable: e.retryable, message: e.message } };
+        }
         const msg = e instanceof Error ? e.message : String(e);
         return { ok: false, error: { code: "UPSTREAM_ERROR", retryable: false, message: msg } };
       }

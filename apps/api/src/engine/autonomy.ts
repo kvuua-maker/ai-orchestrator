@@ -22,14 +22,15 @@ const HUMAN_MARKERS: Array<{ re: RegExp; reason: string; question: string }> = [
 
 /** Жорсткі межі: агент не робить це ніколи, лише пропонує альтернативу (§4.18). */
 const HARD_LIMITS: Array<{ re: RegExp; reason: string; alternative: string }> = [
-  { re: /банк|bank|iban|swift|переказ коштів/i, reason: "banking_operation",
-    alternative: "Агент підготує платіжне доручення (PDF/CSV) — підписуєте ви у своєму банку." },
+  // порядок важливий: специфічніші межі перевіряються раніше за загальні
+  { re: /біометр|biometric|face ?id|touch ?id|passkey/i, reason: "biometric_auth",
+    alternative: "Авторизація на пристрої — агент не має доступу до біометрії." },
   { re: /кеп|кваліфікован\w+ підпис|digital signature/i, reason: "qualified_signature",
     alternative: "Агент збереже документ і покаже, де підписати; КЕП залишається у вас." },
   { re: /sms.*(номер|number)|код на номер/i, reason: "sms_to_unknown_number",
     alternative: "Код надходить лише на ваш номер — агент не може його перехопити." },
-  { re: /біометр|biometric|face ?id|touch ?id|passkey/i, reason: "biometric_auth",
-    alternative: "Авторизація на пристрої — агент не має доступу до біометрії." },
+  { re: /банк|bank|iban|swift|переказ коштів/i, reason: "banking_operation",
+    alternative: "Агент підготує платіжне доручення (PDF/CSV) — підписуєте ви у своєму банку." },
 ];
 
 export function detectHardLimit(goalText: string): DeadEndVerdict | null {

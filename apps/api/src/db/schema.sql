@@ -210,3 +210,44 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS audit_tenant_idx ON audit_log (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS audit_action_idx ON audit_log (tenant_id, action, created_at DESC);
+
+-- ── Білінг і квоти (§19) ──
+CREATE TABLE IF NOT EXISTS plans (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  price_usd numeric(10,2) NOT NULL,
+  monthly_runs integer NOT NULL,
+  monthly_tokens bigint NOT NULL,
+  max_concurrent integer NOT NULL DEFAULT 2,
+  overage_per_1k_tokens numeric(10,4) NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+  tenant_id text PRIMARY KEY,
+  plan_id text NOT NULL REFERENCES plans(id),
+  status text NOT NULL DEFAULT 'active',
+  period_start timestamptz NOT NULL DEFAULT date_trunc('month', now()),
+  period_end timestamptz NOT NULL DEFAULT date_trunc('month', now()) + interval '1 month',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS usage_events (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  run_id text,
+  kind text NOT NULL,
+  quantity bigint NOT NULL DEFAULT 0,
+  cost_usd numeric(12,6) NOT NULL DEFAULT 0,
+  meta jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS usage_tenant_idx ON usage_events (tenant_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS invoices (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  period_start timestamptz NOT NULL,
+  period_end timestamptz NOT NULL,
+  amount_usd numeric(12,4) NOT NULL,
+  status text NOT NULL DEFAULT 'draft',
+  lines jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS invoices_tenant_idx ON invoices (tenant_id, created_at DESC);

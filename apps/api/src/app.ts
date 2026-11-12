@@ -15,6 +15,7 @@ import { metrics } from "./observability/metrics.js";
 import { writeAudit, listAudit } from "./observability/audit.js";
 import { TRACE_HEADER, isValidTraceId, newTraceId, logLine } from "./observability/trace.js";
 import { createServiceDb } from "./db/index.js";
+import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
 import { cacheGet, cacheSet, cacheKey, cacheStats, cachePurgeExpired } from "./memory/cache.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
@@ -124,6 +125,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       if (rows[0]) return reply.code(rows[0].status_code).send({ ...rows[0].response, replayed: true });
     }
 
+    const quota = await db.tx(req.tenantId, (q) => getQuota(q, req.tenantId));
+    if (!quota.allowed) {
+      metrics.inc("aio_quota_denied_total", { reason: quota.reason ?? "unknown" });
+      return reply.code(402).send({ error: {
+        code: "QUOTA_EXCEEDED", message: `квоту вичерпано: ${quota.reason}`,
+        details: { plan: quota.plan.id, runsRemaining: quota.runsRemaining, tokensRemaining: quota.tokensRemaining,
+                   periodEnd: quota.usage.periodEnd },
+      } });
+    }
+
     const budget = { maxUsd: 0.5, maxDurationSeconds: 900, maxSteps: 40, ...(body.budget ?? {}) };
     const run = await db.tx(req.tenantId, async (q: QueryFn) => {
       const r = await insertRun(q, { tenantId: req.tenantId, userId: DEFAULT_USER, prompt: body.prompt, budget, dryRun: body.dryRun });
@@ -133,6 +144,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
         meta: { promptChars: body.prompt.length, dryRun: body.dryRun } });
       return r;
     });
+    await db.tx(req.tenantId, (q) => recordUsage(q, { tenantId: req.tenantId, runId: run.id, kind: "run", quantity: 1 }));
     engine.enqueue(run.id, req.tenantId);
 
     const payload = { run: runView({ ...run, budget }), replayed: false };
@@ -303,6 +315,39 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     }
     return { ok: true, data: { simulated: true, reason: "no simulate(); input is valid, pure tool would run as-is" }, costMicros: 0, cached: false, dryRun: true, evidence: [], artifacts: [] };
   });
+
+  // ── білінг і квоти (§19) ──
+  app.get("/v1/billing/plan", async (req: any) =>
+    db.tx(req.tenantId, async (q) => ({ quota: await getQuota(q, req.tenantId), plans: await listPlans(q) })));
+
+  app.get("/v1/billing/usage", async (req: any) =>
+    db.tx(req.tenantId, async (q) => ({ usage: await getUsage(q, req.tenantId), quota: await getQuota(q, req.tenantId) })));
+
+  app.post("/v1/billing/plan", async (req: any, reply) => {
+    const body = z.object({ planId: z.string().min(1) }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "planId required" } });
+    const sub = await db.tx(req.tenantId, async (q) => {
+      const plans = await listPlans(q);
+      if (!plans.find((p) => p.id === body.data.planId)) return null;
+      return setPlan(q, req.tenantId, body.data.planId);
+    });
+    if (!sub) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "plan not found" } });
+    return { subscription: sub };
+  });
+
+  app.post("/v1/billing/invoices", async (req: any, reply) => {
+    const inv = await db.tx(req.tenantId, async (q) => {
+      await createInvoice(q, req.tenantId);
+      return (await listInvoices(q, req.tenantId, 1))[0];
+    }).catch(() => null);
+    if (!inv) return reply.code(409).send({ error: { code: "CONFLICT", message: "no subscription" } });
+    await db.tx(req.tenantId, (q) => writeAudit(q, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
+      action: "invoice.created", resource: "invoice", resourceId: inv.id, traceId: req.traceId, meta: { amount: inv.amount_usd } }));
+    return reply.code(201).send({ invoice: inv });
+  });
+
+  app.get("/v1/billing/invoices", async (req: any) =>
+    db.tx(req.tenantId, async (q) => ({ items: await listInvoices(q, req.tenantId), server_time: new Date().toISOString() })));
 
   // ── спостережуваність (§22) ──
   app.get("/metrics", async (_req, reply) => {
