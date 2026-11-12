@@ -12,7 +12,7 @@ import { createLlm } from "./engine/llm.js";
 import { bus } from "./conversation/bus.js";
 import { createRegistry } from "./tools/index.js";
 import { createEmbedder } from "./memory/embedder.js";
-import { getPendingHandoff, listHandoffs, resolveHandoff } from "./engine/handoff.js";
+import { getPendingHandoff, listHandoffs, resolveHandoff, reopenTask } from "./engine/handoff.js";
 import { reconcileStalledRuns } from "./engine/recovery.js";
 import { metrics } from "./observability/metrics.js";
 import { writeAudit, listAudit } from "./observability/audit.js";
@@ -533,6 +533,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       await db.tx(req.tenantId, (tx) => writeAudit(tx, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
         action: "handoff.resolved", resource: "handoff", resourceId: outcome.handoff.id, traceId: req.traceId, ip: req.ip,
         meta: { option: body.data.option ?? null } }));
+      // крок, що зупинився, виконується повторно; відповідь людини стає фактом у run
+      await db.tx(req.tenantId, async (tx) => {
+        await reopenTask(tx, outcome.handoff);
+        if (body.data.answer) {
+          await tx("UPDATE runs SET result = coalesce(result,'{}'::jsonb) || jsonb_build_object('manualAnswer', $2::text) WHERE id=$1",
+            [run.id, body.data.answer]);
+        }
+      });
       engine.resume(run.id, req.tenantId);
     }
     return { handoff: { id: outcome.handoff.id, status: outcome.handoff.status }, runId: run?.id ?? null, resumed: !!run };

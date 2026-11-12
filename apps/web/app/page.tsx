@@ -28,6 +28,8 @@ export default function ChatPage() {
   const [nowTs, setNowTs] = useState(Date.now());
   const runSeconds = busyRun && runStart ? Math.max(0, Math.floor((nowTs - runStart) / 1000)) : 0;
   const [stopping, setStopping] = useState(false);
+  const [handoff, setHandoff] = useState<{ id: string; question: string; options: Array<{ id: string; label: string }> } | null>(null);
+  const [manual, setManual] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sidebar, setSidebar] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -136,6 +138,30 @@ export default function ChatPage() {
     const t = setInterval(() => setNowTs(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // поки задача виконується — стежимо, чи не просить агент людину
+  useEffect(() => {
+    if (!busyRun) { setHandoff(null); return; }
+    const pull = async () => {
+      try {
+        const d = await api<any>(`/v1/runs/${busyRun}`);
+        if (d?.handoff) setHandoff({ id: d.handoff.id, question: d.handoff.question, options: d.handoff.options ?? [] });
+      } catch { /* ignore */ }
+    };
+    pull();
+    const t = setInterval(pull, 2500);
+    return () => clearInterval(t);
+  }, [busyRun]);
+
+  async function answerHandoff(option?: string) {
+    if (!handoff) return;
+    try {
+      await api(`/v1/handoffs/${handoff.id}/resolve`, { method: "POST",
+        body: JSON.stringify(option ? { option } : { answer: manual.trim() || "продовжити" }) });
+      setHandoff(null); setManual("");
+      setSteps((prev) => [...prev, { label: option ? "Продовжую після вашого рішення" : "Взяв ваші дані", status: "running", icon: "⏳" }]);
+    } catch (e: any) { setError(e.message); }
+  }
 
   async function stopRun() {
     if (!busyRun || stopping) return;
@@ -274,6 +300,24 @@ export default function ChatPage() {
             )}
             <div ref={endRef} />
           </div>
+
+          {handoff && (
+            <div style={{ margin: "6px 0", padding: "12px 14px", borderRadius: 10, background: "#241b0a", border: "1px solid #5a4318" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Потрібна ваша участь</div>
+              <div style={{ fontSize: 12.5, color: "#e8d5a8", lineHeight: 1.6 }}>{handoff.question}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                <button onClick={() => answerHandoff("done")} style={{ padding: "8px 14px", borderRadius: 8, border: 0, background: "#4f7cff", color: "#fff", fontSize: 13, cursor: "pointer" }}>Продовжити</button>
+                <button onClick={() => answerHandoff("skip")} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #2a3145", background: "transparent", color: "#c7ccd8", fontSize: 13, cursor: "pointer" }}>Пропустити сайт</button>
+                <button onClick={() => answerHandoff("abort")} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #7a2730", background: "transparent", color: "#ff9b9b", fontSize: 13, cursor: "pointer" }}>Зупинити</button>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="або вставте дані (напр. ціну) вручну"
+                  style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: 8, border: "1px solid #3a2f18", background: "#0e1117", color: "#e6e8ee", fontSize: 13 }} />
+                <button onClick={() => answerHandoff()} disabled={!manual.trim()}
+                  style={{ padding: "8px 12px", borderRadius: 8, border: 0, background: manual.trim() ? "#3ecf8e" : "#2a3145", color: "#06120c", fontSize: 13, cursor: manual.trim() ? "pointer" : "default" }}>Взяти</button>
+              </div>
+            </div>
+          )}
 
           {error && <div style={{ margin: "6px 0", padding: "9px 12px", borderRadius: 8, background: "#2a1518", border: "1px solid #5a2530", color: "#ff9b9b", fontSize: 12 }}>{error}</div>}
 

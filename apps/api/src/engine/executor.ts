@@ -33,6 +33,10 @@ export interface EngineDeps {
 
 const URL_RE = /https?:\/\/[^\s)]+/;
 
+/** Магазини й маркетплейси без JS не віддають контент — одразу відкриваємо браузером. */
+const SHOP_HOSTS = /(rozetka|comfy|prom\.ua|epicentr|citrus|moyo|foxtrot|allo|telemart|ct\.ua|makeup|notino|ajax|iherb|amazon|ebay|aliexpress)/i;
+const prefersBrowser = (url: string) => SHOP_HOSTS.test(url);
+
 export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
   const llm = deps.llm ?? createLlm();
   const tools = deps.registry ?? defaultRegistry;
@@ -106,8 +110,11 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
         metrics: { steps: 0, tokens: 0, costUsd: 0, durationMs: 0 },
       };
 
-      for (const toolName of node.tools) {
+      for (const rawTool of node.tools) {
         const url = node.goal.match(URL_RE)?.[0] ?? run.prompt.match(URL_RE)?.[0] ?? "";
+        // магазин → браузер, навіть якщо план сказав http.fetch
+        const toolName = rawTool === "http.fetch" && prefersBrowser(url) && tools.has("browser.open") ? "browser.open" : rawTool;
+        if (toolName !== rawTool) publishStep(`Магазин — відкриваю справжнім браузером`, "running", "🌐");
         const loopKey = `${toolName}:${url}`;
 
         let toolArgs: Record<string, unknown>;
@@ -148,7 +155,10 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
         if (res.ok) {
           await step((q) => appendEvent(q, runId, "tool.result", { taskId: node.id, tool: toolName, ok: true, summary: "ok" }));
           const d = res.data as any;
-          if (d?.text) findings.push(String(d.text).slice(0, 400));
+          // ціни — окремим рядком, інакше вони губляться в перших 400 символах сторінки
+          if (Array.isArray(d?.prices) && d.prices.length) findings.push(`Знайдені ціни: ${d.prices.slice(0, 12).join(", ")}`);
+          if (d?.title) findings.push(`Сторінка: ${d.title}`);
+          if (d?.text) findings.push(String(d.text).slice(0, 1500));
           out.summary = `Отримано ${d?.bytes ?? 0} байт (HTTP ${d?.status ?? "?"})`;
           publishStep(d?.bytes ? `Прочитав ${d.bytes} байт (HTTP ${d.status})` : node.goal, "done", "✓");
         } else {

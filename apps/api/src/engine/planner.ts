@@ -56,6 +56,8 @@ export function createPlanner(llm: LlmClient, toolNames: string[]) {
 {"nodes":[{"agent":"browser|coder|ops|writer|data|verifier|synthesizer","goal":string,
 "tools":string[],"dependsOn":number[],"estCostUsd":number}]}
 Правила: 1-5 вузлів; dependsOn — індекси попередніх вузлів; tools лише зі списку ${JSON.stringify(toolNames)};
+Для магазинів, маркетплейсів і SPA (rozetka, comfy, prom, epicentr тощо) ОБОВ'ЯЗКОВО browser.open, а не http.fetch;
+для звичайних сторінок і API — http.fetch;
 незалежні вузли не мають залежностей (вони виконуються паралельно); без пояснень.`,
         user: `Ціль: ${goal.objective}\nDeliverables: ${JSON.stringify(goal.deliverables)}\nЗапит: ${prompt.slice(0, 1500)}`,
         maxTokens: 900,

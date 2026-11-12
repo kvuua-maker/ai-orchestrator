@@ -56,6 +56,12 @@ export async function resolveHandoff(
   return rows[0] ? { ok: true, handoff: rows[0] } : { ok: false, reason: "race" };
 }
 
+/** Після рішення людини крок, що зупинився, має виконатись повторно. */
+export async function reopenTask(q: QueryFn, handoff: HandoffRow): Promise<void> {
+  if (!handoff.task_id) return;
+  await q("UPDATE tasks SET status='pending', started_at=NULL, finished_at=NULL WHERE id=$1", [handoff.task_id]);
+}
+
 export async function expireStaleHandoffs(q: QueryFn): Promise<number> {
   const { rows } = await q<any>(
     "UPDATE handoffs SET status='expired' WHERE status='pending' AND expires_at IS NOT NULL AND expires_at <= now() RETURNING id");
