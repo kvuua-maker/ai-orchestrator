@@ -86,6 +86,10 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0050 | File manager as a first-class screen over VFS; file ≠ attachment | Accepted |
 | 0051 | History is conversations/messages, not a list of runs | Accepted |
 | 0052 | Stop has three levels; partial result is always preserved | Accepted |
+| 0053 | Video is edited, not generated (real footage beats generative) | Accepted |
+| 0054 | Stock footage is B-roll only; brand faces come from the client | Accepted |
+| 0055 | Two-stage render: 480p draft → revisions → 1080p final | Accepted |
+| 0056 | Voice cloning only with verified consent; synthetic faces banned | Accepted |
 
 Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §33.1 and a
 full argument in the relevant chapter.
