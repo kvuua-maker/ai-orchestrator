@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import pg from "pg";
 
-const ADMIN = process.env.PG_ADMIN_URL ?? "postgres://aio@127.0.0.1:55432/aio";
+const ADMIN = process.env.AUDIT_DB_URL ?? process.env.PG_ADMIN_URL ?? "postgres://aio@127.0.0.1:55432/aio";
 const APP = process.env.DATABASE_URL ?? "postgres://aio_app@127.0.0.1:6432/aio";
 
 const checks = [];
@@ -18,6 +18,9 @@ await admin.connect();
 const rls = await admin.query(
   `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
    WHERE relname = ANY($1::text[]) ORDER BY relname`, [TENANT_TABLES]);
+// Якщо бачимо не всі таблиці — аудит недійсний (найчастіше — підключились не до тієї БД)
+add("Аудит підключений до бази застосунку", rls.rows.length === TENANT_TABLES.length,
+    `знайдено ${rls.rows.length} з ${TENANT_TABLES.length} таблиць`);
 const notEnabled = rls.rows.filter((r) => !r.relrowsecurity).map((r) => r.relname);
 const notForced = rls.rows.filter((r) => !r.relforcerowsecurity).map((r) => r.relname);
 add("RLS увімкнено на всіх тенантних таблицях", notEnabled.length === 0, notEnabled.join(", "));
@@ -104,8 +107,9 @@ for (const f of FILES) {
 add("Немає схожих на секрети рядків у коді", hits.length === 0, hits.slice(0, 5).join("; "));
 
 // 9. Ключі в .env не потрапляють у логи
-const envExists = existsSync(".env");
-add(".env існує локально (не в git)", envExists);
+const envPath = process.env.AIO_ENV_FILE ?? ".env";
+const envExists = existsSync(envPath);
+add("Файл середовища існує (не в git)", envExists, envPath);
 
 const failed = checks.filter((c) => !c.ok);
 console.log(JSON.stringify({ checks, summary: { total: checks.length, passed: checks.length - failed.length, failed: failed.length } }, null, 2));
