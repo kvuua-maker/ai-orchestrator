@@ -5,6 +5,7 @@ import { registry as defaultRegistry, type ToolRegistry } from "../tools/index.j
 import type { ArtifactStore } from "../artifacts/store.js";
 import { BudgetExceeded, BudgetGuard } from "./budget.js";
 import { classifyFailure, LoopGuard, type DeadEndVerdict } from "./autonomy.js";
+import { ArgsUnavailable, inferableTools, inferToolArgs } from "./tool-args.js";
 import { createHandoff, getPendingHandoff } from "./handoff.js";
 import { createLlm, type LlmClient } from "./llm.js";
 import { createPlanner } from "./planner.js";
@@ -33,7 +34,8 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
   const llm = deps.llm ?? createLlm();
   const tools = deps.registry ?? defaultRegistry;
   const router = deps.router ?? createRouter(llm);
-  const planner = deps.planner ?? createPlanner(llm, tools.list().map((t) => t.name));
+  // планувальник бачить лише інструменти, чиї аргументи рушій може вивести
+  const planner = deps.planner ?? createPlanner(llm, inferableTools(tools));
   const concurrency = deps.concurrency ?? 3;
   const artifacts = deps.artifacts;
   const pending: Promise<void>[] = [];
@@ -99,6 +101,20 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
       for (const toolName of node.tools) {
         const url = node.goal.match(URL_RE)?.[0] ?? run.prompt.match(URL_RE)?.[0] ?? "";
         const loopKey = `${toolName}:${url}`;
+
+        let toolArgs: Record<string, unknown>;
+        try {
+          toolArgs = inferToolArgs(tools, toolName, node, run.prompt);
+        } catch (e) {
+          if (e instanceof ArgsUnavailable) {
+            // Не викликаємо інструмент навмання: фіксуємо, чого не вистачає
+            out.status = "failed";
+            out.summary = `Аргументи недоступні: ${e.missing.join(", ")}`;
+            out.blockers.push(e.message);
+            break;
+          }
+          throw e;
+        }
         if (loops.observe(loopKey)) {
           paused = { kind: "dead_end", reason: "loop_detected", message: `Повтор ${loopKey} — агент застряг` };
           out.status = "blocked";
@@ -106,8 +122,8 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           break;
         }
 
-        await step((q) => appendEvent(q, runId, "tool.called", { taskId: node.id, tool: toolName, args: { url } }));
-        const res = await tools.invoke(toolName, { url }, {
+        await step((q) => appendEvent(q, runId, "tool.called", { taskId: node.id, tool: toolName, args: Object.keys(toolArgs) }));
+        const res = await tools.invoke(toolName, toolArgs, {
           tenantId, runId, taskId: node.id, dryRun: run.dry_run,
           budgetUsd: guard.snapshot().remainingUsd, artifacts,
         }, node.agent);

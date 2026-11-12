@@ -269,10 +269,12 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     catch { return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "no parts uploaded" } }); }
 
     const stored = await artifacts.put({ bytes, mime: upload.mime, name: upload.filename });
-    await db.query("INSERT INTO artifacts (key, tenant_id, mime, bytes, sha256, name) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (key) DO NOTHING",
-      [stored.key, req.tenantId, stored.mime, stored.bytes, stored.sha256, stored.name ?? null]);
     const fileId = newId.file();
-    await db.query("UPDATE uploads SET status='complete', file_id=$2 WHERE id=$1", [upload.id, fileId]);
+    await db.tx(req.tenantId, async (q) => {
+      await q("INSERT INTO artifacts (key, tenant_id, mime, bytes, sha256, name) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (key) DO NOTHING",
+        [stored.key, req.tenantId, stored.mime, stored.bytes, stored.sha256, stored.name ?? null]);
+      await q("UPDATE uploads SET status='complete', file_id=$2 WHERE id=$1", [upload.id, fileId]);
+    });
     await rm(join(TMP_UPLOADS, `${upload.id}-1`), { force: true });
 
     const { exp, sig } = artifacts.sign(stored.key, 900);
@@ -290,7 +292,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     if (!exp || !sig) return reply.code(401).send({ error: { code: "UNAUTHORIZED", message: "signature required" } });
     const check = artifacts.verify(key, Number(exp), String(sig));
     if (!check.ok) return reply.code(check.reason === "expired" ? 410 : 403).send({ error: { code: "FORBIDDEN", message: check.reason } });
-    const { rows } = await db.query<any>("SELECT mime FROM artifacts WHERE key=$1 AND tenant_id=$2", [key, req.tenantId]);
+    const rows: any[] = await db.tx(req.tenantId, async (q) => {
+      const r = await q<any>("SELECT mime FROM artifacts WHERE key=$1 AND tenant_id=$2", [key, req.tenantId]);
+      return r.rows;
+    });
     if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "artifact not found" } });
     const bytes = await artifacts.get(key);
     return reply.header("content-type", rows[0].mime).header("content-length", bytes.length).send(bytes);
@@ -512,7 +517,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   app.post("/v1/documents/process", async (req: any, reply) => {
     const body = z.object({ key: z.string().length(64) }).safeParse(req.body);
     if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "key required" } });
-    const { rows } = await db.query<any>("SELECT mime, name FROM artifacts WHERE key=$1 AND tenant_id=$2", [body.data.key, req.tenantId]);
+    const rows: any[] = await db.tx(req.tenantId, async (q) => {
+      const r = await q<any>("SELECT mime, name FROM artifacts WHERE key=$1 AND tenant_id=$2", [body.data.key, req.tenantId]);
+      return r.rows;
+    });
     if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "artifact not found" } });
 
     let bytes: Buffer;
@@ -551,8 +559,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       meta: { "Створено": new Date().toISOString().slice(0, 10), "Джерело": "AI Orchestrator" },
     });
     const stored = await artifacts.put({ bytes: file.bytes, mime: file.mime, name: file.name });
-    await db.query("INSERT INTO artifacts (key, tenant_id, mime, bytes, sha256, name) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (key) DO NOTHING",
-      [stored.key, req.tenantId, stored.mime, stored.bytes, stored.sha256, file.name]);
+    await db.tx(req.tenantId, (q) => q(
+      "INSERT INTO artifacts (key, tenant_id, mime, bytes, sha256, name) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (key) DO NOTHING",
+      [stored.key, req.tenantId, stored.mime, stored.bytes, stored.sha256, file.name]));
     const { exp, sig } = artifacts.sign(stored.key, 900);
     return reply.code(201).send({
       key: stored.key, name: file.name, mime: file.mime, bytes: stored.bytes,

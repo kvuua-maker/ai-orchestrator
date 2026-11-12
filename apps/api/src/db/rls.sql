@@ -28,6 +28,7 @@ DO $$ BEGIN
   WITH CHECK (EXISTS (SELECT 1 FROM runs r WHERE r.id = tasks.run_id));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+ALTER TABLE artifacts ENABLE ROW LEVEL SECURITY;   -- ENABLE обов'язковий: FORCE сам по собі не вмикає
 ALTER TABLE artifacts FORCE ROW LEVEL SECURITY;
 GRANT SELECT, INSERT, UPDATE, DELETE ON artifacts TO aio_app;
 DO $$ BEGIN
