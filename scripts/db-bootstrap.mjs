@@ -16,10 +16,18 @@ if (!rows.length) await root.query("CREATE DATABASE aio OWNER aio_owner");
 await root.end();
 
 // 2. схема від власника
-const db = new pg.Client({ connectionString: admin.replace("/postgres", "/aio") });
+if (!process.env.PG_ADMIN_URL && !process.env.PGHOST) {
+  console.error("PG_ADMIN_URL (або PGHOST/PGUSER/PGPASSWORD) не заданий");
+  process.exit(2);
+}
+const dbUrl = new URL(admin);
+dbUrl.pathname = "/aio";                       // НЕ string.replace: він плутає user з db
+const db = new pg.Client({ connectionString: dbUrl.toString() });
 await db.connect();
 await db.query(readFileSync(new URL("../apps/api/src/db/schema.sql", import.meta.url), "utf8"));
 await db.query(readFileSync(new URL("../apps/api/src/db/rls.sql", import.meta.url), "utf8"));
+const appPw = process.env.AIO_APP_PASSWORD;
+if (appPw) await db.query(`ALTER ROLE aio_app WITH PASSWORD ${db.escapeLiteral(appPw)}`);
 await db.end();
 
 // 3. перевірка з ролі застосунку
@@ -30,6 +38,7 @@ await app.query("SELECT set_config('app.tenant_id','tnt_demo0001',true)");
 const cnt = await app.query("SELECT count(*)::int AS n FROM runs");
 await app.query("COMMIT");
 const forced = await app.query("SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname IN ('runs','run_events','tasks','devices','secrets') ORDER BY relname");
+console.log("admin:", `${dbUrl.host}${dbUrl.pathname}`);
 console.log("app role sees runs:", cnt.rows[0].n);
 console.log(forced.rows);
 await app.end();
