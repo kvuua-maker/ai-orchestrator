@@ -474,6 +474,27 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     return { ...result, traceId: req.traceId };
   });
 
+  app.post("/v1/conversations/:id/start", async (req: any, reply) => {
+    const body = z.object({ text: z.string().min(3).max(2000) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "text required" } });
+    const quota = await db.tx(req.tenantId, (q) => getQuota(q, req.tenantId));
+    if (!quota.allowed) return reply.code(402).send({ error: { code: "QUOTA_EXCEEDED", message: `квоту вичерпано: ${quota.reason}` } });
+
+    const conv = await db.tx(req.tenantId, (q) => getConversation(q, req.params.id));
+    if (!conv) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "conversation not found" } });
+
+    const run = await db.tx(req.tenantId, async (q) => {
+      const r = await insertRun(q, { tenantId: req.tenantId, userId: DEFAULT_USER, prompt: body.data.text,
+        budget: { maxUsd: 0.5, maxDurationSeconds: 900, maxSteps: 40 }, dryRun: false });
+      await q("UPDATE runs SET conversation_id=$2 WHERE id=$1", [r.id, conv.id]);
+      await appendEvent(q, r.id, "run.created", { prompt: body.data.text, fromConfirm: true });
+      await recordUsage(q, { tenantId: req.tenantId, runId: r.id, kind: "run", quantity: 1 });
+      return r;
+    });
+    engine.enqueue(run.id, req.tenantId);
+    return reply.code(202).send({ runId: run.id });
+  });
+
   // SSE: нові повідомлення розмови + події активного запуску
   app.get("/v1/conversations/:id/stream", async (req: any, reply) => {
     const convId = req.params.id;

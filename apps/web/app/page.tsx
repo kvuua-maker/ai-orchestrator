@@ -8,6 +8,21 @@ import { api, API, H, STATUS_LABEL, TENANT } from "./lib";
 type Msg = { id: string; role: "user" | "assistant" | "system"; content: string; run_id?: string | null; meta?: any; created_at: string };
 type Conv = { id: string; title: string; updated_at: string; last_message?: string; messages?: number };
 
+/** Виправляє типові помилки браузерного розпізнавання української мови. */
+function fixTranscript(raw: string): string {
+  return raw
+    .replace(/\bес\s*е\b/gi, "SE")
+    .replace(/\bесе\b/gi, "SE")
+    .replace(/\bпро\s*макс\b/gi, "Pro Max")
+    .replace(/\bпро\b/gi, "Pro")
+    .replace(/\bплюс\b/gi, "Plus")
+    .replace(/\bміні\b/gi, "mini")
+    .replace(/\bаи?фон\b/gi, "iPhone")
+    .replace(/\bайфон\b/gi, "iPhone")
+    .replace(/\b(\d{2,4})\s*(гігабайт\w*|гб)\b/gi, "$1 ГБ")
+    .replace(/\s{2,}/g, " ");
+}
+
 function speak(msg: { content: string }) {
   const synth = (window as any).speechSynthesis;
   if (!synth) return;
@@ -178,6 +193,15 @@ export default function ChatPage() {
     return () => clearInterval(t);
   }, [busyRun]);
 
+  async function startConfirmed(text: string) {
+    if (!convId) return;
+    try {
+      const r = await api<{ runId: string }>(`/v1/conversations/${convId}/start`, { method: "POST", body: JSON.stringify({ text }) });
+      setBusyRun(r.runId); setRunStart(Date.now());
+      setSteps([{ label: "Починаю пошук…", status: "running", icon: "⏳" }]);
+    } catch (e: any) { setError(e.message); }
+  }
+
   async function answerHandoff(option?: string) {
     if (!handoff) return;
     try {
@@ -198,7 +222,7 @@ export default function ChatPage() {
     rec.onresult = (e: any) => {
       let t = "";
       for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript;
-      setText((base + " " + t).trim());
+      setText(fixTranscript((base + " " + t).trim()));
     };
     rec.onend = () => setListening(false);
     rec.onerror = (e: any) => { setListening(false); if (e.error !== "aborted") setError("Не вдалося розпізнати мовлення: " + e.error); };
@@ -230,7 +254,7 @@ export default function ChatPage() {
       const r = await api<{ messageId: string; content: string; runId: string | null; intent: string; plan?: string[]; options?: string[] }>(
         `/v1/conversations/${cid}/messages`, { method: "POST", body: JSON.stringify({ text: value }) });
       setMsgs((m) => (m.some((x) => x.id === r.messageId) ? m
-        : [...m, { id: r.messageId, role: "assistant", content: r.content, meta: { intent: r.intent, plan: r.plan, options: r.options }, run_id: r.runId, created_at: new Date().toISOString() }]));
+        : [...m, { id: r.messageId, role: "assistant", content: r.content, meta: { intent: r.intent, plan: r.plan, options: r.options, pending: (r as any).pending }, run_id: r.runId, created_at: new Date().toISOString() }]));
       setThinking(false); setStreaming(null);
       if (r.runId) setBusyRun(r.runId);   // кроки НЕ чистимо: перші вже могли прийти через SSE
       loadConvs();
@@ -324,7 +348,7 @@ export default function ChatPage() {
               </div>
             )}
 
-            {msgs.map((m) => <Bubble key={m.id} msg={m} onPick={send} />)}
+            {msgs.map((m) => <Bubble key={m.id} msg={m} onPick={send} onConfirm={startConfirmed} onEdit={(t) => { setText(t); }} />)}
 
             {thinking && <Typing />}
             {streaming && (
@@ -427,7 +451,7 @@ function Avatar() {
   );
 }
 
-function Bubble({ msg, onPick }: { msg: Msg; onPick: (v: string) => void }) {
+function Bubble({ msg, onPick, onConfirm, onEdit }: { msg: Msg; onPick: (v: string) => void; onConfirm?: (t: string) => void; onEdit?: (t: string) => void }) {
   const mine = msg.role === "user";
   const options: string[] = [];   // clarify прибрано: агент не питає дозволу
   const plan: string[] = msg.meta?.plan ?? [];
@@ -448,6 +472,18 @@ function Bubble({ msg, onPick }: { msg: Msg; onPick: (v: string) => void }) {
           )}
         </div>
 
+        {(msg.meta?.intent === "confirm") && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            <button onClick={() => onConfirm?.(msg.meta?.pending?.text ?? "")}
+              style={{ padding: "8px 14px", borderRadius: 8, border: 0, background: "#3ecf8e", color: "#06120c", fontSize: 13, cursor: "pointer" }}>
+              Почати пошук
+            </button>
+            <button onClick={() => onEdit?.(msg.meta?.pending?.text ?? "")}
+              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #2a3145", background: "transparent", color: "#c7ccd8", fontSize: 13, cursor: "pointer" }}>
+              Виправити
+            </button>
+          </div>
+        )}
         {!mine && (
           <button onClick={() => speak(msg)} title="Озвучити" aria-label="Озвучити"
             style={{ marginTop: 4, background: "transparent", border: 0, color: "#4d5568", fontSize: 12, cursor: "pointer", padding: "2px 4px" }}>

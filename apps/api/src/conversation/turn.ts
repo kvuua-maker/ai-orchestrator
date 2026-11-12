@@ -5,9 +5,11 @@ import { ingestText, searchMemory } from "../memory/store.js";
 import { appendEvent, insertRun } from "../repo/runs.js";
 import { getHistory, addMessage, setTitleIfDefault } from "./store.js";
 import { classifyTurn, extractFacts, looksLikeTask, streamReply, type TurnPlan } from "./brain.js";
+import { interpretPhoneQuery, isProductSearch } from "./products.js";
 import { bus } from "./bus.js";
 
 export interface TurnResult {
+  pending?: { text: string; understood: string; canonical: string | null; issue: string | null } | null;
   intent: string;
   runId: string | null;
   messageId: string;
@@ -36,7 +38,31 @@ export async function runTurn(
     return h.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "assistant" as const : "user" as const, content: m.content }));
   });
 
-  // швидкий шлях: явна задача стартує без окремого виклику класифікатора
+  // 1) пошук товару → спершу показуємо, ЯК зрозуміли, і чекаємо «так»
+  const product = isProductSearch(text) ? interpretPhoneQuery(text) : null;
+  if (product) {
+    const body = product.issue
+      ? `Я зрозумів: **${product.understood}**.\n\n${product.issue}\n\nПідкажіть правильний варіант — і я одразу почну пошук.`
+      : `Я зрозумів: ви шукаєте **${product.understood}**.\n\nВсе вірно? Якщо так — натисніть «Почати пошук», і я перевірю ціни. Якщо ні — скажіть, що виправити.`;
+    const msg = await db.tx(tenantId, (q) => addMessage(q, {
+      tenantId, conversationId, role: "assistant", content: body, runId: null,
+      meta: { intent: "confirm", pending: { text, understood: product.understood, canonical: product.canonical, issue: product.issue } },
+    }));
+    return { intent: "confirm", runId: null, messageId: msg.id, content: body,
+      plan: undefined, options: ["Почати пошук", "Виправити"],
+      pending: { text, understood: product.understood, canonical: product.canonical, issue: product.issue } };
+  }
+
+  // 2) корекція: «ти не так зрозумів» — не переказуємо, а питаємо точну назву
+  if (/не так зрозум|ти не зрозумів|не те\b|помилив|я мав на увазі|неправильно зрозум/i.test(text)) {
+    const body = "Вибачте. Що саме я пропустив? Напишіть точну назву моделі (наприклад, **iPhone SE 2020 256 ГБ**) — і я виправлю.";
+    const msg = await db.tx(tenantId, (q) => addMessage(q, {
+      tenantId, conversationId, role: "assistant", content: body, runId: null, meta: { intent: "correct" },
+    }));
+    return { intent: "correct", runId: null, messageId: msg.id, content: body };
+  }
+
+  // 3) звичайний шлях
   const plan: TurnPlan = looksLikeTask(text)
     ? { intent: "act" }
     : await classifyTurn(llm, { text, history });
