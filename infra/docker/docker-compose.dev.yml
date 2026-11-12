@@ -22,6 +22,13 @@ services:
       DEFAULT_POOL_SIZE: "50"
     ports: ["6432:6432"]
 
+  sandbox-base:
+    build:
+      context: .
+      dockerfile: sandbox.Dockerfile
+    image: aio/sandbox-base:latest
+    profiles: ["build-only"]
+
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
@@ -33,6 +40,10 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio12345
     ports: ["9000:9000", "9001:9001"]
+
+# gVisor: на хості має бути встановлений runsc і доданий у /etc/docker/daemon.json:
+#   { "runtimes": { "runsc": { "path": "/usr/bin/runsc" } } }
+# Без цього контейнери пісочниці працюють на звичайному runc (слабша ізоляція).
 
 volumes:
   pgdata:

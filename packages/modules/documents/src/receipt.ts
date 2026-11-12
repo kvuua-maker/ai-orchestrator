@@ -16,7 +16,7 @@ export interface ParsedReceipt {
   quality: number;
 }
 
-const MONEY = String.raw`(\d{1,3}(?:[ \u00A0]\d{3})*(?:[.,]\d{2})?)`;
+const MONEY = String.raw`(\d{1,3}(?:[ \u00A0]\d{3})+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)`;
 const TOTAL_RE = new RegExp(String.raw`(?:всього|до сплати|сума|итого|total)\s*:?\s*${MONEY}`, "i");
 const DATE_RE = /\b(\d{2})[.\-/](\d{2})[.\-/](\d{4})\b/;
 const EDRPOU_RE = /\b(\d{8})\b/;

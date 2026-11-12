@@ -114,3 +114,15 @@ describe("OCR engines", () => {
     await expect(textLayerEngine.recognize({ bytes: new Uint8Array(), mime: "image/png" })).rejects.toThrow();
   });
 });
+
+describe("parseMoney — крайові формати", () => {
+  it("без розділювачів тисяч: 5000000.00", () => {
+    expect(parseMoney("5000000.00")).toBe(5_000_000);
+  });
+  it("з розділювачами: 5 000 000,00", () => {
+    expect(parseMoney("5 000 000,00")).toBe(5_000_000);
+  });
+  it("мішаний: 1 240.50", () => {
+    expect(parseMoney("1 240.50")).toBe(1240.5);
+  });
+});

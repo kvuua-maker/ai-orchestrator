@@ -104,20 +104,27 @@ describe("synthetic tenant — 10 сценаріїв", () => {
     expect(listB.items.find((i: any) => i.id === id)).toBeUndefined();
   });
 
-  it("10. presign → complete → artifact; device registration", async () => {
+  it("10. presign → upload → complete → artifact (content-addressed); device registration", async () => {
     const pre = await app.inject({ method: "POST", url: "/v1/uploads/presign", headers: A,
       payload: { filename: "receipt.pdf", mime: "application/pdf", sizeBytes: 6 * 1024 * 1024 } });
     expect(pre.statusCode).toBe(201);
     const p = pre.json();
     expect(p.parts.length).toBe(2);
-    const done = await app.inject({ method: "POST", url: `/v1/uploads/${p.uploadId}/complete`, headers: A,
-      payload: { parts: p.parts.map((x: any) => ({ partNumber: x.partNumber, etag: "e" })) } });
+
+    const put = await app.inject({ method: "PUT", url: `/v1/uploads/${p.uploadId}/parts/1`,
+      headers: { ...A, "content-type": "application/octet-stream" }, payload: Buffer.from("%PDF-receipt") });
+    expect(put.statusCode).toBe(200);
+
+    const done = await app.inject({ method: "POST", url: `/v1/uploads/${p.uploadId}/complete`, headers: A, payload: {} });
     expect(done.statusCode).toBe(200);
-    expect(done.json().artifact.key).toContain("receipt.pdf");
+    const body = done.json();
+    expect(body.artifact.key).toMatch(/^[a-f0-9]{64}$/);   // sha256, а не ім'я файлу
+    expect(body.url).toContain("/v1/artifacts/");
 
     const dev = await app.inject({ method: "POST", url: "/v1/devices", headers: A,
       payload: { platform: "ios", apnsToken: "a".repeat(64), appVersion: "0.1.0" } });
     expect(dev.statusCode).toBe(201);
     expect(dev.json().deviceId).toMatch(/^dev_/);
   });
+
 });

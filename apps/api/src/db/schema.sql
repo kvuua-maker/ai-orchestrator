@@ -117,3 +117,13 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   CREATE POLICY secrets_tenant ON secrets USING (tenant_id = current_setting('app.tenant_id', true)) WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE TABLE IF NOT EXISTS artifacts (
+  key text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  mime text NOT NULL,
+  bytes bigint NOT NULL,
+  sha256 text NOT NULL,
+  name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS artifacts_tenant_idx ON artifacts (tenant_id, created_at DESC);

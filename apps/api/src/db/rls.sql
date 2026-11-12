@@ -27,3 +27,11 @@ DO $$ BEGIN
   USING (EXISTS (SELECT 1 FROM runs r WHERE r.id = tasks.run_id))
   WITH CHECK (EXISTS (SELECT 1 FROM runs r WHERE r.id = tasks.run_id));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE artifacts FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON artifacts TO aio_app;
+DO $$ BEGIN
+  CREATE POLICY artifacts_tenant ON artifacts FOR ALL
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

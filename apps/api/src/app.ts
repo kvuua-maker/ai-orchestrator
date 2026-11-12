@@ -9,6 +9,9 @@ import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
 import { newId } from "./ids.js";
+import { createArtifactStore } from "./artifacts/store.js";
+import { writeFile, readFile, rm, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 const DEFAULT_TENANT = "tnt_demo0001";
 const DEFAULT_USER = "usr_demo0001";
@@ -28,7 +31,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   const db = opts.db ?? (await createDb());
   await seed(db);
   const engine = createEngine(db);
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1024 * 1024 });
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 30 * 1024 * 1024 });
+  const artifacts = createArtifactStore();
+  const TMP_UPLOADS = join(artifacts.root, "tmp");
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
 
   app.decorate("db", db);
   app.decorate("engine", engine);
@@ -168,15 +174,53 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     });
   });
 
+  // Прийом байтів: локальний драйвер presigned-URL (у проді — S3/MinIO PUT)
+  app.put("/v1/uploads/:id/parts/:n", async (req: any, reply) => {
+    const { rows } = await db.query<any>("SELECT id FROM uploads WHERE id=$1 AND tenant_id=$2", [req.params.id, req.tenantId]);
+    if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "upload not found" } });
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "empty body" } });
+    }
+    await mkdir(TMP_UPLOADS, { recursive: true });
+    await writeFile(join(TMP_UPLOADS, `${req.params.id}-${req.params.n}`), body);
+    return { partNumber: Number(req.params.n), bytes: body.length, etag: String(body.length) };
+  });
+
   app.post("/v1/uploads/:id/complete", async (req: any, reply) => {
     const { rows } = await db.query<any>("SELECT * FROM uploads WHERE id=$1 AND tenant_id=$2", [req.params.id, req.tenantId]);
     if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "upload not found" } });
+    const upload = rows[0];
+    let bytes: Buffer;
+    try { bytes = await readFile(join(TMP_UPLOADS, `${upload.id}-1`)); }
+    catch { return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "no parts uploaded" } }); }
+
+    const stored = await artifacts.put({ bytes, mime: upload.mime, name: upload.filename });
+    await db.query("INSERT INTO artifacts (key, tenant_id, mime, bytes, sha256, name) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (key) DO NOTHING",
+      [stored.key, req.tenantId, stored.mime, stored.bytes, stored.sha256, stored.name ?? null]);
     const fileId = newId.file();
-    await db.query("UPDATE uploads SET status='complete', file_id=$2 WHERE id=$1", [req.params.id, fileId]);
+    await db.query("UPDATE uploads SET status='complete', file_id=$2 WHERE id=$1", [upload.id, fileId]);
+    await rm(join(TMP_UPLOADS, `${upload.id}-1`), { force: true });
+
+    const { exp, sig } = artifacts.sign(stored.key, 900);
     return {
       fileId,
-      artifact: { key: `uploads/${fileId}/${rows[0].filename}`, kind: "file", bytes: Number(rows[0].size_bytes), mime: rows[0].mime },
+      artifact: { key: stored.key, kind: "file", bytes: stored.bytes, mime: stored.mime, sha256: stored.sha256 },
+      url: `/v1/artifacts/${stored.key}?exp=${exp}&sig=${sig}`,
+      expiresIn: 900,
     };
+  });
+
+  app.get("/v1/artifacts/:key", async (req: any, reply) => {
+    const { exp, sig } = req.query as { exp?: string; sig?: string };
+    const key = String(req.params.key);
+    if (!exp || !sig) return reply.code(401).send({ error: { code: "UNAUTHORIZED", message: "signature required" } });
+    const check = artifacts.verify(key, Number(exp), String(sig));
+    if (!check.ok) return reply.code(check.reason === "expired" ? 410 : 403).send({ error: { code: "FORBIDDEN", message: check.reason } });
+    const { rows } = await db.query<any>("SELECT mime FROM artifacts WHERE key=$1 AND tenant_id=$2", [key, req.tenantId]);
+    if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "artifact not found" } });
+    const bytes = await artifacts.get(key);
+    return reply.header("content-type", rows[0].mime).header("content-length", bytes.length).send(bytes);
   });
 
   // ── devices ──
