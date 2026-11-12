@@ -174,6 +174,14 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           publishStep(`Не вдалося: ${verdict.reason}`, "failed", "✕");
           out.blockers.push(verdict.message);
 
+          const humanAlready = Boolean((run.result as any)?.humanConfirmed);
+          if (verdict.kind === "needs_human" && humanAlready) {
+            // людина вже підтвердила — не питаємо вдруге, крок пропускаємо честно
+            publishStep("Людина підтвердила, але сайт усе ще блокує — пропускаю крок", "done", "↷");
+            out.status = "success";
+            out.summary = "крок пропущено після підтвердження людини";
+            break;
+          }
           if (verdict.kind === "needs_human" || verdict.kind === "hard_limit") {
             paused = verdict;
             const handoff = await step((q) => createHandoff(q, { tenantId, runId, taskId: node.id, verdict }));

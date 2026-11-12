@@ -19,6 +19,7 @@ import { writeAudit, listAudit } from "./observability/audit.js";
 import { TRACE_HEADER, isValidTraceId, newTraceId, logLine } from "./observability/trace.js";
 import { createServiceDb } from "./db/index.js";
 import { runTurn } from "./conversation/turn.js";
+import { buildSuggestions } from "./conversation/proactive.js";
 import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
@@ -435,6 +436,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     return reply.code(201).send({ conversation: conv });
   });
 
+  app.get("/v1/proactive", async (req: any) => {
+    const out = await db.tx(req.tenantId, (q) => buildSuggestions(q, llm, embedder, req.tenantId));
+    return { ...out, server_time: new Date().toISOString() };
+  });
+
   app.get("/v1/conversations", async (req: any) => {
     const items = await db.tx(req.tenantId, (q) => listConversations(q));
     return { items, server_time: new Date().toISOString() };
@@ -536,10 +542,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       // крок, що зупинився, виконується повторно; відповідь людини стає фактом у run
       await db.tx(req.tenantId, async (tx) => {
         await reopenTask(tx, outcome.handoff);
-        if (body.data.answer) {
-          await tx("UPDATE runs SET result = coalesce(result,'{}'::jsonb) || jsonb_build_object('manualAnswer', $2::text) WHERE id=$1",
-            [run.id, body.data.answer]);
-        }
+        await tx(`UPDATE runs SET result = coalesce(result,'{}'::jsonb)
+                  || jsonb_build_object('humanConfirmed', true)
+                  || CASE WHEN $2::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('manualAnswer', $2::text) END
+                  WHERE id=$1`, [run.id, body.data.answer ?? null]);
       });
       engine.resume(run.id, req.tenantId);
     }

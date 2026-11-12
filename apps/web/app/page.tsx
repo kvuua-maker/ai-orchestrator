@@ -8,6 +8,15 @@ import { api, API, H, STATUS_LABEL, TENANT } from "./lib";
 type Msg = { id: string; role: "user" | "assistant" | "system"; content: string; run_id?: string | null; meta?: any; created_at: string };
 type Conv = { id: string; title: string; updated_at: string; last_message?: string; messages?: number };
 
+function speak(msg: { content: string }) {
+  const synth = (window as any).speechSynthesis;
+  if (!synth) return;
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(msg.content.replace(/[*_`#>-]/g, " ").slice(0, 600));
+  u.lang = "uk-UA"; u.rate = 1.02;
+  synth.speak(u);
+}
+
 const SUGGESTIONS = [
   "Що ти вмієш?",
   "Перевір https://example.com і зроби висновок",
@@ -30,6 +39,10 @@ export default function ChatPage() {
   const [stopping, setStopping] = useState(false);
   const [handoff, setHandoff] = useState<{ id: string; question: string; options: Array<{ id: string; label: string }> } | null>(null);
   const [manual, setManual] = useState("");
+  const [listening, setListening] = useState(false);
+  const [speakOut, setSpeakOut] = useState(true);
+  const [proactive, setProactive] = useState<Array<{ label: string; text: string }>>([]);
+  const recRef = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [sidebar, setSidebar] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -55,6 +68,11 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
+    api<{ suggestions: Array<{ label: string; text: string }> }>("/v1/proactive")
+      .then((d) => setProactive(d.suggestions ?? [])).catch(() => setProactive([]));
+  }, []);
+
+  useEffect(() => {
     (async () => {
       const items = await loadConvs();
       const last = items[0]?.id;
@@ -70,7 +88,14 @@ export default function ChatPage() {
     const handle = (type: string, d: any) => {
       if (type === "message.created") {
         const m: Msg = d;
-        setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+        setMsgs((prev) => {
+          if (prev.some((x) => x.id === m.id)) return prev;
+          if (m.role === "user") {
+            const i = prev.findIndex((x) => x.id.startsWith("tmp-") && x.content === m.content);
+            if (i >= 0) { const copy = [...prev]; copy[i] = m; return copy; }
+          }
+          return [...prev, m];
+        });
         setThinking(false);
         // busyRun НЕ чіпаємо: plan-повідомлення зберігається одразу, а задача ще виконується
       } else if (type === "message.start") {
@@ -161,6 +186,23 @@ export default function ChatPage() {
       setHandoff(null); setManual("");
       setSteps((prev) => [...prev, { label: option ? "Продовжую після вашого рішення" : "Взяв ваші дані", status: "running", icon: "⏳" }]);
     } catch (e: any) { setError(e.message); }
+  }
+
+  function toggleMic() {
+    if (listening) { recRef.current?.stop(); setListening(false); return; }
+    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { setError("Цей браузер не підтримує розпізнавання мовлення. Скористайтесь Chrome або Safari."); return; }
+    const rec = new SR();
+    rec.lang = "uk-UA"; rec.interimResults = true; rec.continuous = false;
+    let base = text;
+    rec.onresult = (e: any) => {
+      let t = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript;
+      setText((base + " " + t).trim());
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = (e: any) => { setListening(false); if (e.error !== "aborted") setError("Не вдалося розпізнати мовлення: " + e.error); };
+    recRef.current = rec; base = text; rec.start(); setListening(true);
   }
 
   async function stopRun() {
@@ -256,10 +298,24 @@ export default function ChatPage() {
             {msgs.length === 0 && !thinking && (
               <div style={{ textAlign: "center", padding: "28px 8px" }}>
                 <div style={{ fontSize: 30, opacity: 0.5 }}>◍</div>
-                <div style={{ fontSize: 15, marginTop: 10 }}>Привіт! Я ваш цифровий помічник.</div>
+                <div style={{ fontSize: 15, marginTop: 10 }}>
+                  Привіт! Я ваш цифровий помічник.{proactive.length > 0 ? " Пам'ятаю, що ми робили раніше — можу продовжити." : ""}
+                </div>
                 <div style={{ fontSize: 12.5, color: "#8b93a7", marginTop: 6, maxWidth: 460, marginInline: "auto", lineHeight: 1.6 }}>
                   Можу перевірити сайти, розпізнати чеки й накладні, зробити таблицю чи звіт і запам'ятати контекст.
                 </div>
+                {proactive.length > 0 && (
+                  <div style={{ marginTop: 18 }}>
+                    <div style={{ fontSize: 11, color: "#5f677a", marginBottom: 8, textTransform: "uppercase", letterSpacing: .4 }}>На основі вашої історії</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+                      {proactive.map((sug) => (
+                        <button key={sug.label} onClick={() => send(sug.text)} style={{
+                          fontSize: 12.5, padding: "8px 13px", borderRadius: 99, border: "1px solid #2a4aa8",
+                          background: "#14204a", color: "#b9c9ff", cursor: "pointer" }}>{sug.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", marginTop: 16 }}>
                   {SUGGESTIONS.map((s) => (
                     <button key={s} onClick={() => send(s)} style={{ fontSize: 12, padding: "7px 12px", borderRadius: 99, border: "1px solid #232838", background: "#12151d", color: "#c7ccd8", cursor: "pointer" }}>{s}</button>
@@ -326,6 +382,11 @@ export default function ChatPage() {
               <textarea className="composer-input" rows={1} value={text} placeholder="Напишіть повідомлення…"
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
+              <button onClick={toggleMic} aria-label="Диктувати" title="Диктувати"
+                style={{ flexShrink: 0, width: 38, height: 38, borderRadius: 8, border: `1px solid ${listening ? "#ff6b6b" : "#2a3145"}`,
+                  background: listening ? "#3a1418" : "transparent", color: listening ? "#ff9b9b" : "#8b93a7", fontSize: 16, cursor: "pointer" }}>
+                {listening ? "■" : "🎤"}
+              </button>
               <button className="composer-send" onClick={() => send()} disabled={thinking || !text.trim()}
                 style={{ background: thinking || !text.trim() ? "#2a3145" : "#4f7cff", color: "#fff", cursor: thinking ? "default" : "pointer" }}>
                 {thinking ? "…" : "Надіслати"}
@@ -387,6 +448,12 @@ function Bubble({ msg, onPick }: { msg: Msg; onPick: (v: string) => void }) {
           )}
         </div>
 
+        {!mine && (
+          <button onClick={() => speak(msg)} title="Озвучити" aria-label="Озвучити"
+            style={{ marginTop: 4, background: "transparent", border: 0, color: "#4d5568", fontSize: 12, cursor: "pointer", padding: "2px 4px" }}>
+            🔊
+          </button>
+        )}
         {options.length > 0 && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             {options.map((o) => (
