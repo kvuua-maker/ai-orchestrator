@@ -9,6 +9,7 @@ async function getBrowser(): Promise<Browser> {
   if (!shared) {
     shared = (async () => {
       const { chromium } = await import("playwright");
+      process.env.PLAYWRIGHT_BROWSERS_PATH ||= "/mnt/HC_Volume_106461592/aio/pw-browsers";
       const proxy = process.env.BROWSER_PROXY_URL;
       return chromium.launch({
         headless: true,
@@ -62,14 +63,15 @@ export const browserOpen = defineTool({
       let status = 0;
       const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
       status = resp?.status() ?? 0;
-      await page.waitForLoadState("networkidle", { timeout: 12_000 }).catch(() => {});
-      await page.waitForTimeout(waitMs ?? 5000);
+      await page.waitForLoadState("networkidle", { timeout: 2500 }).catch(() => {});
+      await page.waitForTimeout(waitMs ?? 700);
       // каталоги підвантажуються скриптом — прокручуємо, щоб дійшли картки з цінами
-      const doScroll = scroll !== false;
-      if (doScroll) {
-        for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, 1800); await page.waitForTimeout(900); }
-        await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
-        await page.waitForTimeout(1200);
+      // прокручуємо лише якщо сторінка схожа на каталог і цін ще не видно
+      const isShop = /(rozetka|comfy|prom\.ua|epicentr|citrus|moyo|foxtrot|allo|telemart|ct\.ua)/i.test(url);
+      const shouldScroll = scroll === true || (scroll !== false && isShop);
+      if (shouldScroll) {
+        for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 1600); await page.waitForTimeout(500); }
+        await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
       }
       const title = await page.title();
       const bodyText = (await page.locator("body").innerText().catch(() => "")) ?? "";

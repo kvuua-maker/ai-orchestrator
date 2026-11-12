@@ -14,6 +14,21 @@ export interface HistoryItem { role: "user" | "assistant"; content: string }
 
 const RE_FACT_HINT = /мене звати|мене зовут|мій |моя |моє |мої |постачальник|клієнт|працюю з|запам'ятай|наша компанія|наш |наше /i;
 
+const SMALLTALK_RE = /^(бу+|ау|ей|привіт|прив|хай|добрий день|доброго дня|добрий вечір|вітаю|здоров|ок|окей|ага|так|ні|дякую|спасибі|thanks|hello|hi|hey|ти тут|є хто|чуєш)(?:\s|$|[!,.?])/iu;
+const QUESTION_START = /^(що|шо|як|чому|навіщо|коли|де|хто|скільки|чи|можеш|можна|розкажи|поясни|what|why|how|can you)(?:\s|$|[,.?!])/iu;
+
+/** Привітання й короткі репліки — не потребують ні LLM, ні задачі. */
+export function isSmalltalk(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[!.…]+$/, "");
+  return t.length <= 24 && (SMALLTALK_RE.test(t) || /^[\p{Emoji}\p{L}]{1,3}$/u.test(t));
+}
+
+/** Пряме питання — можна одразу відповідати, без окремого кроку класифікації. */
+export function isDirectQuestion(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return t.endsWith("?") || QUESTION_START.test(t);
+}
+
 const TASK_RE = /https?:\/\/|(перевір|знайди|зроби|порівняй|завантаж|розпізнай|зібери|порахуй|склади|проаналізуй|відкрий|оброби|експортуй|створи|підготуй|надішли|заповни)/i;
 
 /** Очевидна задача — не витрачаємо круг LLM на класифікацію. */
@@ -42,7 +57,9 @@ options — лише для clarify: 2–4 конкретні варіанти.`
   });
 
   // clarify більше не існує: будь-яка нечітка задача стає act із припущенням
-  const intent: Intent = out?.intent === "answer" ? "answer" : "act";
+  // ВАЖЛИВО: якщо модель не відповіла або відповіла нечітко — це answer, а не act.
+  // Раніше невдача класифікації запускала задачу (run) на будь-яке «Бу» чи «привіт».
+  const intent: Intent = out?.intent === "act" ? "act" : "answer";
   return {
     intent,
     plan: Array.isArray(out?.plan) ? out!.plan!.map(String).slice(0, 5) : undefined,

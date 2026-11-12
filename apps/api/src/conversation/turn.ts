@@ -4,7 +4,7 @@ import type { Embedder } from "../memory/embedder.js";
 import { ingestText, searchMemory } from "../memory/store.js";
 import { appendEvent, insertRun } from "../repo/runs.js";
 import { getHistory, addMessage, setTitleIfDefault } from "./store.js";
-import { classifyTurn, extractFacts, looksLikeTask, streamReply, type TurnPlan } from "./brain.js";
+import { classifyTurn, extractFacts, isDirectQuestion, isSmalltalk, looksLikeTask, streamReply, type TurnPlan } from "./brain.js";
 import { interpretPhoneQuery, isProductSearch } from "./products.js";
 import { bus } from "./bus.js";
 
@@ -62,10 +62,23 @@ export async function runTurn(
     return { intent: "correct", runId: null, messageId: msg.id, content: body };
   }
 
-  // 3) звичайний шлях
+  // 4) звичайний шлях: питання не витрачає окремий круг на класифікацію
+  // 3) дрібні репліки — миттєво, без LLM і без задачі
+  if (isSmalltalk(text)) {
+    const body = /бу+|ау|ей|чуєш|ти тут/i.test(text)
+      ? "Я тут. Кажіть задачу — зроблю."
+      : "Вітаю! Опишіть задачу — я складу план і виконаю.";
+    const msg = await db.tx(tenantId, (q) => addMessage(q, {
+      tenantId, conversationId, role: "assistant", content: body, runId: null, meta: { intent: "smalltalk" },
+    }));
+    return { intent: "answer", runId: null, messageId: msg.id, content: body };
+  }
+
   const plan: TurnPlan = looksLikeTask(text)
     ? { intent: "act" }
-    : await classifyTurn(llm, { text, history });
+    : isDirectQuestion(text)
+      ? { intent: "answer" }
+      : await classifyTurn(llm, { text, history });
 
   // факти про клієнта → у контекст
   let facts: string[] = [];
@@ -86,6 +99,7 @@ export async function runTurn(
       return r;
     });
     runId = run.id;
+    engine.enqueue(run.id, tenantId);   // робота стартує паралельно з показом плану
   }
 
   const messageId = `msg_live_${Date.now().toString(36)}`;
@@ -104,7 +118,7 @@ export async function runTurn(
   }));
   bus.publish(conversationId, { type: "message.done", messageId: saved.id, content, meta: saved.meta });
 
-  if (runId) engine.enqueue(runId, tenantId);
+  // повторно не ставимо: задачу вже поставлено в чергу вище
 
   // пам'ять фактів — після відповіді, щоб не затримувати людину
   if (embedder) {

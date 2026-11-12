@@ -55,7 +55,9 @@ export function createPlanner(llm: LlmClient, toolNames: string[]) {
         system: `Ти — планувальник DAG для RPA-агента. Поверни ЛИШЕ JSON:
 {"nodes":[{"agent":"browser|coder|ops|writer|data|verifier|synthesizer","goal":string,
 "tools":string[],"dependsOn":number[],"estCostUsd":number}]}
-Правила: 1-5 вузлів; dependsOn — індекси попередніх вузлів; tools лише зі списку ${JSON.stringify(toolNames)};
+Правила: 1-4 вузли, МІНІМУМ кроків (одна дія = один вузол); dependsOn — індекси попередніх вузлів; tools лише зі списку ${JSON.stringify(toolNames)};
+Якщо в запиті одне посилання й одна дія — роби РІВНО ОДИН вузол (не додавай «перевірити», «проаналізувати», «підсумувати» окремими кроками);
+Якщо в запиті немає джерела даних (ні посилання, ні файлу) і задача вимагає даних — один вузол: чесно сказати, що потрібні дані;
 Для магазинів, маркетплейсів і SPA (rozetka, comfy, prom, epicentr тощо) ОБОВ'ЯЗКОВО browser.open, а не http.fetch;
 для звичайних сторінок і API — http.fetch;
 незалежні вузли не мають залежностей (вони виконуються паралельно); без пояснень.`,

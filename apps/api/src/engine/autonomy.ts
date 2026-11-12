@@ -14,12 +14,12 @@ export interface DeadEndVerdict {
 }
 
 const HUMAN_MARKERS: Array<{ re: RegExp; reason: string; question: string }> = [
-  { re: /blocked|cloudflare|перевірка безпеки|just a moment|verify you are human/i, reason: "antibot_challenge",
-    question: "Сайт показує перевірку безпеки. Відкрийте його у своєму браузері, пройдіть перевірку — і натисніть «Продовжити». Або вставте потрібні дані (наприклад, ціну) вручну." },
   { re: /captcha|recaptcha|hcaptcha|cloudflare challenge/i, reason: "captcha", question: "Сайт вимагає проходження CAPTCHA. Пройдіть її у вікні браузера й натисніть «Продовжити»." },
   { re: /\botp\b|one[- ]time (code|password)|2fa|двофактор|код підтвердження/i, reason: "otp_required", question: "Потрібен одноразовий код. Введіть його — він не зберігається." },
   { re: /login|sign in|увійдіть|пароль|password/i, reason: "login_required", question: "Потрібен вхід у акаунт. Увійдіть у браузері й натисніть «Продовжити»." },
   { re: /confirm (payment|transfer)|підтвердіть (платіж|переказ)/i, reason: "payment_confirmation", question: "Підтвердіть платіж у банківському застосунку." },
+  { re: /cloudflare|перевірка безпеки|just a moment|verify you are human/i, reason: "antibot_challenge",
+    question: "Сайт показує перевірку безпеки. Відкрийте його у своєму браузері, пройдіть перевірку — і натисніть «Продовжити». Або вставте потрібні дані (наприклад, ціну) вручну." },
 ];
 
 /** Жорсткі межі: агент не робить це ніколи, лише пропонує альтернативу (§4.18). */

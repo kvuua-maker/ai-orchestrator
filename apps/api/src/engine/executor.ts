@@ -113,7 +113,9 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
       for (const rawTool of node.tools) {
         const url = node.goal.match(URL_RE)?.[0] ?? run.prompt.match(URL_RE)?.[0] ?? "";
         // магазин → браузер, навіть якщо план сказав http.fetch
-        const toolName = rawTool === "http.fetch" && prefersBrowser(url) && tools.has("browser.open") ? "browser.open" : rawTool;
+        let toolName = rawTool === "http.fetch" && prefersBrowser(url) && tools.has("browser.open") ? "browser.open" : rawTool;
+        // зворотне правило: браузер для звичайної сторінки — зайві 5–10 с
+        if (toolName === "browser.open" && url && !prefersBrowser(url) && tools.has("http.fetch")) toolName = "http.fetch";
         if (toolName !== rawTool) publishStep(`Магазин — відкриваю справжнім браузером`, "running", "🌐");
         const loopKey = `${toolName}:${url}`;
 
@@ -146,10 +148,23 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           publishStep(`${node.goal.slice(0, 60)} · ${sec} с`, "running", "⏳");
         }, 4000);
 
-        const res = await tools.invoke(toolName, toolArgs, {
+        let res = await tools.invoke(toolName, toolArgs, {
           tenantId, runId, taskId: node.id, dryRun: run.dry_run,
           budgetUsd: guard.snapshot().remainingUsd, artifacts,
         }, node.agent);
+
+        // якщо швидкий HTTP дав порожньо — піднімаємо важку артилерію
+        if (toolName === "http.fetch" && res.ok) {
+          const body = String((res.data as any)?.text ?? "");
+          if (body.replace(/\s/g, "").length < 300 && tools.has("browser.open")) {
+            publishStep("Сторінка порожня без JS — відкриваю браузером", "running", "🌐");
+            res = await tools.invoke("browser.open", toolArgs, {
+              tenantId, runId, taskId: node.id, dryRun: run.dry_run,
+              budgetUsd: guard.snapshot().remainingUsd, artifacts,
+            }, node.agent);
+            toolName = "browser.open";
+          }
+        }
         clearInterval(beat);
 
         if (res.ok) {
