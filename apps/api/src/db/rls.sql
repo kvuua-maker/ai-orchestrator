@@ -61,3 +61,32 @@ DO $$ BEGIN
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Сервісна роль для фонових задач: бачить усі тенанти, але це явна політика, а не bypass
+DO $$ BEGIN CREATE ROLE aio_svc LOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+ALTER ROLE aio_svc NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+GRANT USAGE ON SCHEMA public TO aio_svc;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aio_svc;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aio_svc;
+
+DO $$ DECLARE t text; BEGIN
+  FOREACH t IN ARRAY ARRAY['runs','run_events','tasks','devices','secrets','artifacts','memory_chunks','response_cache','handoffs','audit_log'] LOOP
+    BEGIN
+      EXECUTE format('CREATE POLICY svc_all ON %I FOR ALL TO aio_svc USING (true) WITH CHECK (true)', t);
+    EXCEPTION WHEN duplicate_object THEN NULL; END;
+  END LOOP;
+END $$;
+
+-- Аудит: застосунок може лише читати й дописувати (append-only)
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
+REVOKE UPDATE, DELETE ON audit_log FROM aio_app, aio_svc;
+GRANT SELECT, INSERT ON audit_log TO aio_app;
+DO $$ BEGIN
+  CREATE POLICY audit_tenant ON audit_log FOR SELECT
+  USING (tenant_id = current_setting('app.tenant_id', true));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY audit_insert ON audit_log FOR INSERT
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

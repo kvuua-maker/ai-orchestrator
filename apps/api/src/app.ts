@@ -11,6 +11,10 @@ import { createRegistry } from "./tools/index.js";
 import { createEmbedder } from "./memory/embedder.js";
 import { getPendingHandoff, listHandoffs, resolveHandoff } from "./engine/handoff.js";
 import { reconcileStalledRuns } from "./engine/recovery.js";
+import { metrics } from "./observability/metrics.js";
+import { writeAudit, listAudit } from "./observability/audit.js";
+import { TRACE_HEADER, isValidTraceId, newTraceId, logLine } from "./observability/trace.js";
+import { createServiceDb } from "./db/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
 import { cacheGet, cacheSet, cacheKey, cacheStats, cachePurgeExpired } from "./memory/cache.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
@@ -45,6 +49,25 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
   const TMP_UPLOADS = join(artifacts.root, "tmp");
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
 
+  app.decorateRequest("traceId", "");
+  app.addHook("onRequest", async (req: any) => {
+    const incoming = req.headers[TRACE_HEADER];
+    req.traceId = isValidTraceId(incoming) ? incoming : newTraceId();
+    req.startTime = Date.now();
+    req.log.info(logLine("info", "request.start", {
+      traceId: req.traceId, method: req.method, url: req.url.split("?")[0],
+    }));
+  });
+  app.addHook("onResponse", async (req: any, reply) => {
+    const ms = Date.now() - (req.startTime ?? Date.now());
+    const route = req.routeOptions?.url ?? req.url.split("?")[0];
+    metrics.inc("aio_http_requests_total", { method: req.method, route, status: reply.statusCode });
+    metrics.observe("aio_http_duration_ms", ms, { route });
+    req.log.info(logLine(reply.statusCode >= 500 ? "error" : "info", "request.end", {
+      traceId: req.traceId, method: req.method, route, status: reply.statusCode, ms,
+    }));
+  });
+
   app.decorate("db", db);
   app.decorate("engine", engine);
 
@@ -70,6 +93,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     result: r.result ?? null, error: r.error ?? null,
     createdAt: new Date(r.created_at).toISOString(), updatedAt: new Date(r.updated_at).toISOString(),
     finishedAt: r.finished_at ? new Date(r.finished_at).toISOString() : null,
+  });
+
+  app.addHook("onSend", async (req: any, reply, payload) => {
+    reply.header(TRACE_HEADER, req.traceId ?? "");
+    return payload;
   });
 
   app.get("/healthz", async () => ({ ok: true, driver: db.driver }));
@@ -99,7 +127,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const budget = { maxUsd: 0.5, maxDurationSeconds: 900, maxSteps: 40, ...(body.budget ?? {}) };
     const run = await db.tx(req.tenantId, async (q: QueryFn) => {
       const r = await insertRun(q, { tenantId: req.tenantId, userId: DEFAULT_USER, prompt: body.prompt, budget, dryRun: body.dryRun });
-      await appendEvent(q, r.id, "run.created", { prompt: body.prompt, budget });
+      await appendEvent(q, r.id, "run.created", { prompt: body.prompt, budget, traceId: req.traceId });
+      await writeAudit(q, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
+        action: "run.created", resource: "run", resourceId: r.id, traceId: req.traceId, ip: req.ip,
+        meta: { promptChars: body.prompt.length, dryRun: body.dryRun } });
       return r;
     });
     engine.enqueue(run.id, req.tenantId);
@@ -164,6 +195,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       if (["done", "failed", "cancelled"].includes(run.status)) return { run: runView(run) };
       await setStatus(tx, run.id, "cancelled", { error: "cancelled by user" });
       await appendEvent(tx, run.id, "run.cancelled", { by: "user" });
+      await writeAudit(tx, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
+        action: "run.cancelled", resource: "run", resourceId: run.id, traceId: req.traceId, ip: req.ip });
       return { run: runView(await getRun(tx, run.id)) };
     });
   });
@@ -271,6 +304,57 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     return { ok: true, data: { simulated: true, reason: "no simulate(); input is valid, pure tool would run as-is" }, costMicros: 0, cached: false, dryRun: true, evidence: [], artifacts: [] };
   });
 
+  // ── спостережуваність (§22) ──
+  app.get("/metrics", async (_req, reply) => {
+    reply.header("content-type", "text/plain; version=0.0.4");
+    return metrics.prometheus();
+  });
+
+  app.get("/v1/observability/summary", async (req: any) => {
+    const window = z.object({ hours: z.coerce.number().int().min(1).max(168).default(24) }).parse(req.query ?? {});
+    const since = `now() - interval '${window.hours} hours'`;
+    const out = await db.tx(req.tenantId, async (q) => {
+      const byStatus = await q<any>(`SELECT status, count(*)::int AS n FROM runs WHERE created_at > ${since} GROUP BY status`);
+      const totals = await q<any>(`SELECT count(*)::int AS runs, coalesce(sum(spent_usd),0)::float8 AS cost,
+        count(*) FILTER (WHERE status='done')::int AS done,
+        count(*) FILTER (WHERE status IN ('failed','stalled'))::int AS failed
+        FROM runs WHERE created_at > ${since}`);
+      const duration = await q<any>(`SELECT
+        coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM (finished_at - created_at)) * 1000), 0)::int AS p50_ms,
+        coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM (finished_at - created_at)) * 1000), 0)::int AS p95_ms
+        FROM runs WHERE finished_at IS NOT NULL AND created_at > ${since}`);
+      const handoffs = await q<any>(`SELECT count(*) FILTER (WHERE status='pending')::int AS pending,
+        count(*) FILTER (WHERE status='resolved')::int AS resolved FROM handoffs WHERE created_at > ${since}`);
+      const tools = await q<any>(`SELECT payload->>'tool' AS tool, count(*)::int AS calls
+        FROM run_events WHERE type='tool.result' AND created_at > ${since}
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 5`);
+      const failing = await q<any>(`SELECT payload->>'tool' AS tool, count(*)::int AS failures
+        FROM run_events WHERE type='tool.result' AND payload->>'ok' = 'false' AND created_at > ${since}
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 5`);
+      return { byStatus: byStatus.rows, totals: totals.rows[0], duration: duration.rows[0], handoffs: handoffs.rows[0], tools: tools.rows, failing: failing.rows };
+    });
+
+    const t = out.totals ?? { runs: 0, cost: 0, done: 0, failed: 0 };
+    return {
+      window_hours: window.hours,
+      runs: { total: t.runs, done: t.done, failed: t.failed, by_status: Object.fromEntries(out.byStatus.map((r: any) => [r.status, r.n])) },
+      success_rate: t.runs ? Math.round((t.done / t.runs) * 1000) / 10 : 0,
+      duration_ms: { p50: out.duration?.p50_ms ?? 0, p95: out.duration?.p95_ms ?? 0 },
+      cost_usd: Math.round(Number(t.cost) * 10000) / 10000,
+      handoffs: out.handoffs ?? { pending: 0, resolved: 0 },
+      top_tools: out.tools,
+      failing_tools: out.failing,
+      process: metrics.snapshot(),
+      server_time: new Date().toISOString(),
+    };
+  });
+
+  app.get("/v1/audit", async (req: any) => {
+    const q = z.object({ action: z.string().optional(), resourceId: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query ?? {});
+    const items = await db.tx(req.tenantId, (tx) => listAudit(tx, q));
+    return { items, total: items.length, server_time: new Date().toISOString() };
+  });
+
   // ── Handoff Protocol (§4.17) ──
   app.get("/v1/handoffs", async (req: any) => {
     const q = z.object({ status: z.enum(["pending", "resolved", "expired", "cancelled"]).optional(), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(req.query ?? {});
@@ -298,6 +382,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       await db.tx(req.tenantId, (tx) => appendEvent(tx, run.id, "handoff.resolved", {
         handoffId: outcome.handoff.id, option: body.data.option ?? null,
       }));
+      await db.tx(req.tenantId, (tx) => writeAudit(tx, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
+        action: "handoff.resolved", resource: "handoff", resourceId: outcome.handoff.id, traceId: req.traceId, ip: req.ip,
+        meta: { option: body.data.option ?? null } }));
       engine.resume(run.id, req.tenantId);
     }
     return { handoff: { id: outcome.handoff.id, status: outcome.handoff.status }, runId: run?.id ?? null, resumed: !!run };
@@ -309,13 +396,22 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     if (!["blocked", "stalled", "failed"].includes(run.status)) {
       return reply.code(409).send({ error: { code: "CONFLICT", message: `cannot resume from ${run.status}` } });
     }
+    await db.tx(req.tenantId, (tx) => writeAudit(tx, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
+      action: "run.resumed", resource: "run", resourceId: run.id, traceId: req.traceId, ip: req.ip,
+      meta: { from: run.status } }));
     engine.resume(run.id, req.tenantId);
     return reply.code(202).send({ runId: run.id, resumed: true });
   });
 
   app.post("/v1/runs/reconcile", async (req: any) => {
-    const body = z.object({ staleAfterMs: z.number().int().min(1000).optional() }).safeParse(req.body ?? {});
-    return reconcileStalledRuns(db, { staleAfterMs: body.success ? body.data.staleAfterMs : undefined, tenantId: req.tenantId });
+    const body = z.object({ staleAfterMs: z.number().int().min(1000).optional(), allTenants: z.boolean().optional() }).safeParse(req.body ?? {});
+    const staleAfterMs = body.success ? body.data.staleAfterMs : undefined;
+    if (body.success && body.data.allTenants) {
+      // фоновий обхід усіх тенантів — окрема сервісна роль (§22.5)
+      const svc = await createServiceDb();
+      try { return await reconcileStalledRuns(svc, { staleAfterMs }); } finally { await svc.close(); }
+    }
+    return reconcileStalledRuns(db, { staleAfterMs, tenantId: req.tenantId });
   });
 
   // ── memory & RAG (§10) ──
@@ -431,6 +527,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const secretRef = newId.sec();
     await db.tx(req.tenantId, (tx) => tx("INSERT INTO secrets (id, tenant_id, kind, label, ciphertext, iv, tag, fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
       [secretRef, req.tenantId, body.data.kind, body.data.label, enc.ciphertext, enc.iv, enc.tag, enc.fingerprint]));
+    await db.tx(req.tenantId, (tx) => writeAudit(tx, { tenantId: req.tenantId, actorType: "user", actorId: DEFAULT_USER,
+      action: "secret.created", resource: "secret", resourceId: secretRef, traceId: req.traceId, ip: req.ip,
+      meta: { kind: body.data.kind, label: body.data.label } }));
     return reply.code(201).send({ secretRef, masked: mask(body.data.value), fingerprint: enc.fingerprint, createdAt: new Date().toISOString() });
   });
 

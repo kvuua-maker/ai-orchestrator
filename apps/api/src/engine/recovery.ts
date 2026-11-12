@@ -15,15 +15,15 @@ export async function reconcileStalledRuns(
   const staleMs = opts.staleAfterMs ?? 10 * 60_000;
   const staleSeconds = Math.floor(staleMs / 1000);
 
-  if (!opts.tenantId) throw new Error("tenantId is required: runs are protected by RLS");
-  // Читаємо під RLS-контекстом тенанта — інакше політика не віддасть жодного рядка
-  const { rows } = await db.tx(opts.tenantId, (q) => q<any>(
-    `SELECT id, tenant_id FROM runs
+  // З тенантом — tx під RLS. Без тенанта — лише сервісна роль (політика svc_all),
+  // інакше RLS поверне нуль рядків і «завислі» запуски ніколи не знайдуться.
+  const sql = `SELECT id, tenant_id FROM runs
      WHERE status IN ('queued','planning','running')
        AND last_heartbeat_at < now() - ($1 || ' seconds')::interval
-     LIMIT 100`,
-    [String(staleSeconds)],
-  ));
+     LIMIT 100`;
+  const { rows } = opts.tenantId
+    ? await db.tx(opts.tenantId, (q) => q<any>(sql, [String(staleSeconds)]))
+    : await db.query<any>(sql, [String(staleSeconds)]);
 
   const stalled: string[] = [];
   let expiredHandoffs = 0;

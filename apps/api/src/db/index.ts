@@ -16,8 +16,8 @@ export interface Db {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = readFileSync(join(__dirname, "schema.sql"), "utf8");
 
-export async function createDb(): Promise<Db> {
-  const url = process.env.DATABASE_URL;
+export async function createDb(urlOverride?: string): Promise<Db> {
+  const url = urlOverride ?? process.env.DATABASE_URL;
 
   if (url && url.startsWith("postgres")) {
     const pg: any = await import("pg").then((m: any) => m.default ?? m);
@@ -76,4 +76,14 @@ export async function seed(db: Db): Promise<void> {
   await db.query("INSERT INTO tenants (id, name) VALUES ($1,$2) ON CONFLICT DO NOTHING", ["tnt_other001", "Other"]);
   await db.query("INSERT INTO users (id, tenant_id, email) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
     ["usr_demo0001", "tnt_demo0001", "demo@example.com"]);
+}
+
+/**
+ * Сервісне підключення для фонових задач: бачить усі тенанти через явну
+ * політику svc_all (не BYPASSRLS) — §22.5.
+ */
+export async function createServiceDb(): Promise<Db> {
+  const url = process.env.SERVICE_DATABASE_URL ?? process.env.DATABASE_URL?.replace("aio_app", "aio_svc");
+  if (!url) throw new Error("SERVICE_DATABASE_URL is not configured");
+  return createDb(url);
 }

@@ -28,6 +28,8 @@ await db.query(readFileSync(new URL("../apps/api/src/db/schema.sql", import.meta
 await db.query(readFileSync(new URL("../apps/api/src/db/rls.sql", import.meta.url), "utf8"));
 const appPw = process.env.AIO_APP_PASSWORD;
 if (appPw) await db.query(`ALTER ROLE aio_app WITH PASSWORD ${db.escapeLiteral(appPw)}`);
+const svcPw = process.env.AIO_SVC_PASSWORD;
+if (svcPw) await db.query(`ALTER ROLE aio_svc WITH PASSWORD ${db.escapeLiteral(svcPw)}`);
 await db.end();
 
 // 3. перевірка з ролі застосунку

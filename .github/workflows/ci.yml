@@ -48,6 +48,8 @@ jobs:
       PG_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       DATABASE_URL: postgres://aio_app:aio_app_pw@127.0.0.1:5432/aio
       AIO_APP_PASSWORD: aio_app_pw
+      AIO_SVC_PASSWORD: aio_svc_pw
+      SERVICE_DATABASE_URL: postgres://aio_svc:aio_svc_pw@127.0.0.1:5432/aio
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

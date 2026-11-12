@@ -193,3 +193,20 @@ CREATE TABLE IF NOT EXISTS handoffs (
 );
 CREATE INDEX IF NOT EXISTS handoffs_run_idx ON handoffs (run_id, status);
 CREATE INDEX IF NOT EXISTS handoffs_tenant_idx ON handoffs (tenant_id, status, created_at DESC);
+
+-- ── Аудит (§22.4): append-only ──
+CREATE TABLE IF NOT EXISTS audit_log (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  actor_type text NOT NULL,
+  actor_id text,
+  action text NOT NULL,
+  resource text NOT NULL,
+  resource_id text,
+  trace_id text,
+  ip text,
+  meta jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS audit_tenant_idx ON audit_log (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_action_idx ON audit_log (tenant_id, action, created_at DESC);
