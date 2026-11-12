@@ -90,6 +90,9 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0054 | Stock footage is B-roll only; brand faces come from the client | Accepted |
 | 0055 | Two-stage render: 480p draft → revisions → 1080p final | Accepted |
 | 0056 | Voice cloning only with verified consent; synthetic faces banned | Accepted |
+| 0057 | Autonomy is measured by a 200-domain canary, never declared | Accepted |
+| 0058 | Handoff Protocol: freeze session, human drives it, run resumes | Accepted |
+| 0059 | CAPTCHA solver: max 2 attempts, banned for banks/gov/medical | Accepted |
 
 Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §33.1 and a
 full argument in the relevant chapter.
