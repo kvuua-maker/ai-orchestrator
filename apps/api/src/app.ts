@@ -10,6 +10,7 @@ import { createEngine, type Engine } from "./engine/executor.js";
 import { appendEvent, getEvents, getRun, insertRun, listRuns, setStatus } from "./repo/runs.js";
 import { newId } from "./ids.js";
 import { createArtifactStore } from "./artifacts/store.js";
+import { processDocument, exportFile, planFolders } from "@aio/documents";
 import { writeFile, readFile, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -221,6 +222,66 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "artifact not found" } });
     const bytes = await artifacts.get(key);
     return reply.header("content-type", rows[0].mime).header("content-length", bytes.length).send(bytes);
+  });
+
+  // ── documents pipeline (§13) ──
+  app.post("/v1/documents/process", async (req: any, reply) => {
+    const body = z.object({ key: z.string().length(64) }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "key required" } });
+    const { rows } = await db.query<any>("SELECT mime, name FROM artifacts WHERE key=$1 AND tenant_id=$2", [body.data.key, req.tenantId]);
+    if (!rows[0]) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "artifact not found" } });
+
+    let bytes: Buffer;
+    try { bytes = await artifacts.get(body.data.key); } catch { return reply.code(404).send({ error: { code: "NOT_FOUND", message: "blob missing" } }); }
+
+    const result = await processDocument({ name: rows[0].name ?? "file", bytes, mime: rows[0].mime });
+    return {
+      status: result.status,
+      mime: result.mime,
+      pages: result.pages,
+      engine: result.engine,
+      sha256: result.sha256,
+      reasons: result.reasons,
+      parsed: result.parsed ? {
+        total: result.parsed.total.value, date: result.parsed.date.value,
+        edrpou: result.parsed.edrpou.value, vat: result.parsed.vat.value,
+        items: result.parsed.items.length, quality: result.parsed.quality,
+      } : null,
+      validation: result.validation,
+    };
+  });
+
+  app.post("/v1/documents/export", async (req: any, reply) => {
+    const body = z.object({
+      format: z.enum(["xlsx", "docx", "pdf"]),
+      title: z.string().min(1).max(120),
+      columns: z.array(z.string()).min(1).max(20),
+      rows: z.array(z.record(z.any())).max(5000),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
+
+    const file = await exportFile(body.data.format, {
+      title: body.data.title, columns: body.data.columns, rows: body.data.rows as any,
+      meta: { "Створено": new Date().toISOString().slice(0, 10), "Джерело": "AI Orchestrator" },
+    });
+    const stored = await artifacts.put({ bytes: file.bytes, mime: file.mime, name: file.name });
+    await db.query("INSERT INTO artifacts (key, tenant_id, mime, bytes, sha256, name) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (key) DO NOTHING",
+      [stored.key, req.tenantId, stored.mime, stored.bytes, stored.sha256, file.name]);
+    const { exp, sig } = artifacts.sign(stored.key, 900);
+    return reply.code(201).send({
+      key: stored.key, name: file.name, mime: file.mime, bytes: stored.bytes,
+      url: `/v1/artifacts/${stored.key}?exp=${exp}&sig=${sig}`,
+    });
+  });
+
+  app.post("/v1/documents/folders", async (req: any, reply) => {
+    const body = z.object({
+      docs: z.array(z.object({ key: z.string(), name: z.string(), date: z.string().nullable().optional(),
+        merchant: z.string().nullable().optional(), total: z.number().nullable().optional(), sha256: z.string() })).max(2000),
+      pattern: z.enum(["yyyy/mm/merchant", "yyyy/mm"]).optional(),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "invalid body" } });
+    return planFolders(body.data.docs, { pattern: body.data.pattern });
   });
 
   // ── devices ──

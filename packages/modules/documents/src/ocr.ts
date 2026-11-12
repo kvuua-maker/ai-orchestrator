@@ -27,7 +27,6 @@ export function fixtureEngine(text: string): OcrEngine {
  * Без нього — чесна помилка, а не мовчазний нуль.
  */
 export async function createTesseractEngine(langs = ["ukr", "eng"]): Promise<OcrEngine> {
-  // @ts-expect-error — опційна залежність, встановлюється за потреби
   const tesseract: any = await import("tesseract.js");
   return {
     name: "tesseract",

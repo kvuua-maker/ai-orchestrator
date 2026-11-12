@@ -5,6 +5,15 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "scripts": { "build": "tsc -b" },
-  "dependencies": { "@aio/shared": "0.1.0" }
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@aio/shared": "0.1.0",
+    "docx": "^9.15.3",
+    "exceljs": "^4.4.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438",
+    "tesseract.js": "^7.0.0"
+  }
 }
