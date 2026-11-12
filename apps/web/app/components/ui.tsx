@@ -13,27 +13,24 @@ const NAV = [
 export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
   return (
-    <div style={{ minHeight: "100vh", background: "#0b0d12", color: "#e6e8ee" }}>
-      <header style={{ borderBottom: "1px solid #1c2130", background: "#0e1117", position: "sticky", top: 0, zIndex: 10 }}>
-        <div style={{ maxWidth: 1000, margin: "0 auto", padding: "0 20px", height: 56, display: "flex", alignItems: "center", gap: 24 }}>
-          <Link href="/" style={{ fontWeight: 650, fontSize: 15, color: "#e6e8ee", textDecoration: "none" }}>
-            AI Orchestrator
-          </Link>
-          <nav style={{ display: "flex", gap: 4, flex: 1 }}>
+    <div className="shell">
+      <header className="shell-header">
+        <div className="shell-inner">
+          <Link href="/" className="brand">AI Orchestrator</Link>
+          <nav className="shell-nav">
             {NAV.map((n) => {
               const active = n.href === "/" ? path === "/" : path.startsWith(n.href);
               return (
-                <Link key={n.href} href={n.href} style={{
-                  padding: "6px 12px", borderRadius: 7, fontSize: 13, textDecoration: "none",
+                <Link key={n.href} href={n.href} className="nav-link" style={{
                   color: active ? "#e6e8ee" : "#8b93a7", background: active ? "#181d29" : "transparent",
                 }}>{n.label}</Link>
               );
             })}
           </nav>
-          <Link href="/onboarding" style={{ fontSize: 12, color: "#8b93a7", textDecoration: "none" }}>Онбординг</Link>
+          <Link href="/onboarding" style={{ fontSize: 12, color: "#8b93a7", textDecoration: "none", whiteSpace: "nowrap" }}>Онбординг</Link>
         </div>
       </header>
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "28px 20px 60px" }}>{children}</main>
+      <main className="shell-main">{children}</main>
     </div>
   );
 }

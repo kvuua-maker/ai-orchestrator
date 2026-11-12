@@ -1,0 +1,66 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; background: #0b0d12; color: #e6e8ee; }
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
+#__next, main { min-height: 100%; }
+
+/* ── каркас ── */
+.shell { display: flex; flex-direction: column; min-height: 100dvh; }
+.shell-header { position: sticky; top: 0; z-index: 30; background: #0e1117; border-bottom: 1px solid #1c2130; }
+.shell-inner { max-width: 1000px; margin: 0 auto; padding: 0 16px; height: 56px; display: flex; align-items: center; gap: 12px; width: 100%; }
+.shell-main { width: 100%; max-width: 1000px; margin: 0 auto; padding: 20px 16px 40px; flex: 1; }
+.shell-nav { display: flex; gap: 2px; flex: 1; overflow-x: auto; scrollbar-width: none; }
+.shell-nav::-webkit-scrollbar { display: none; }
+.nav-link { padding: 6px 10px; border-radius: 7px; font-size: 13px; text-decoration: none; white-space: nowrap; }
+.brand { font-weight: 650; font-size: 15px; color: #e6e8ee; text-decoration: none; white-space: nowrap; }
+
+/* ── чат ── */
+.chat-shell { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+.chat-body { flex: 1; display: flex; min-height: 0; width: 100%; max-width: 1000px; margin: 0 auto; }
+.chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0 12px; }
+.chat-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 0 4px; -webkit-overflow-scrolling: touch; }
+.chat-composer { flex-shrink: 0; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); background: #0b0d12; }
+.composer-box { display: flex; gap: 8px; align-items: flex-end; background: #12151d; border: 1px solid #232838; border-radius: 12px; padding: 8px; }
+.composer-input { flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; color: #e6e8ee; font-size: 16px; line-height: 1.4; padding: 8px 6px; font-family: inherit; max-height: 120px; }
+.composer-send { flex-shrink: 0; padding: 9px 14px; border-radius: 8px; border: 0; font-size: 14px; }
+
+.chat-sidebar { width: 250px; flex-shrink: 0; border-right: 1px solid #1c2130; padding: 10px 10px 10px 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.chat-overlay { display: none; }
+
+/* ── повідомлення ── */
+.bubble-row { display: flex; gap: 8px; margin: 10px 0; }
+.bubble-wrap { min-width: 0; max-width: 82%; }
+.bubble { max-width: 100%; padding: 10px 13px; font-size: 14.5px; line-height: 1.6; word-break: break-word; overflow-wrap: anywhere; }
+.bubble-user { background: #1d3a8a; border: 1px solid #2a4aa8; border-radius: 14px 14px 4px 14px; }
+.bubble-bot { background: #12151d; border: 1px solid #232838; border-radius: 14px 14px 14px 4px; }
+.md pre { overflow-x: auto; max-width: 100%; }
+.md img, .md table { max-width: 100%; }
+.md table { display: block; overflow-x: auto; }
+
+/* ── мобільні ── */
+@media (max-width: 900px) {
+  .chat-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 82vw; max-width: 300px; z-index: 60;
+    background: #0e1117; padding: 14px; transform: translateX(-100%); transition: transform .22s ease;
+    box-shadow: 0 0 40px rgba(0,0,0,.6); border-right: 1px solid #1c2130;
+  }
+  .chat-sidebar.open { transform: translateX(0); }
+  .chat-overlay { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 55; }
+  .bubble-wrap { max-width: 88%; }
+  .shell-inner { height: 52px; padding: 0 12px; }
+  .shell-main { padding: 16px 12px 32px; }
+  .chat-header { padding: 6px 0 4px; }
+}
+
+@media (min-width: 901px) {
+  .chat-sidebar { display: flex; }
+  .chat-toggle { display: none !important; }
+  .chat-main { padding: 0 16px; }
+}
+
+/* дрібні екрани */
+@media (max-width: 420px) {
+  .brand { font-size: 14px; }
+  .bubble { font-size: 14px; }
+  .bubble-wrap { max-width: 92%; }
+  .composer-send { padding: 9px 12px; font-size: 13px; }
+}
