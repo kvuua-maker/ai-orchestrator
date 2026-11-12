@@ -52,7 +52,9 @@ export class FastEmbedEmbedder implements Embedder {
     if (!this.modelPromise) {
       this.modelPromise = (async () => {
         const { FlagEmbedding } = await import("fastembed");
-        return FlagEmbedding.init({ model: this.model as any });
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        return FlagEmbedding.init({ model: this.model as any, cacheDir: join(tmpdir(), "aio-fastembed") });
       })();
     }
     return this.modelPromise;

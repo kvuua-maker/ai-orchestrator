@@ -26,12 +26,18 @@ export function fixtureEngine(text: string): OcrEngine {
  * Tesseract підключається опційно (важкий WASM + мовні дані).
  * Без нього — чесна помилка, а не мовчазний нуль.
  */
-export async function createTesseractEngine(langs = ["ukr", "eng"]): Promise<OcrEngine> {
+export async function createTesseractEngine(
+  langs = ["ukr", "eng"],
+  opts: { cachePath?: string } = {},
+): Promise<OcrEngine> {
   const tesseract: any = await import("tesseract.js");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const cachePath = opts.cachePath ?? join(tmpdir(), "aio-tessdata");   // НЕ в репозиторій
   return {
     name: "tesseract",
     async recognize({ bytes }) {
-      const worker = await tesseract.createWorker(langs);
+      const worker = await tesseract.createWorker(langs, 1, { cachePath });
       try {
         const { data } = await worker.recognize(Buffer.from(bytes));
         return { text: String(data.text ?? ""), pages: 1, confidence: Number(data.confidence ?? 0) / 100 };
