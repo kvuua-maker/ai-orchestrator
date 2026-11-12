@@ -13,7 +13,7 @@ SaaS-платформа: користувач пише задачу в чат �
 | Частина | Розділи | Про що |
 |---|---|---|
 | **I — рушій** | §1–§12 | Агенти, браузер і анти-бот, інструменти, пам'ять, SaaS/білінг, безпека, дорожня карта |
-| **II — бізнес-модулі** | §14–§18 | CRM, соцмережі, парсинг, Account Vault, Affiliate |
+| **II — бізнес-модулі** | §13–§18 | Документи/OCR, CRM, соцмережі, парсинг, Account Vault, Affiliate |
 | **III — аудит і план** | §19–§24 | 20 знайдених дір, ідемпотентність/outbox, стійкість, якість даних, відсутні компоненти, план побудови |
 | **Додатки** | §25 | ADR, схема подій, контракти промптів, глосарій, джерела |
 
@@ -28,6 +28,7 @@ packages/
   agent-core/   Planner, executor loop, run state machine, model router
   tools/        Tool registry + інструменти (browser, shell, http, ...)
   modules/      Бізнес-модулі Частини II
+    documents/  OCR, схеми документів, рендер XLSX/DOCX/PDF, VFS-папки
     crm/        Канонічна модель + адаптери KeyCRM/Bitrix24/LP-CRM/SalesDrive
     social/     Telegram, YouTube, Instagram, TikTok (офіційні API)
     scraping/   JSON-LD-first екстрактори для маркетплейсів
