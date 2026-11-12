@@ -6,7 +6,8 @@
 
 ---
 
-**Платформа:** тільки веб (§1.8 ARCHITECTURE.md). Нативних iOS/Android немає; PWA — опційно після запуску.
+**Платформа:** веб-перший (§1.8). PWA — опційно. Нативний iOS — **Phase 2**, після релізу (§34);
+але 4 дні API-ready робимо зараз, у тижнях 1–3, щоб потім не переписувати.
 
 ## 1. Команда і треки
 
@@ -52,7 +53,7 @@
 | A | `ToolDefinition`, `ToolResult`, `RunEvent`, `GoalSpec`, `Plan`, `TaskNode` (zod) | 3 |
 | B | Схеми `DocumentSchema`, `CrmAdapter`, `SocialAdapter` (інтерфейси, без реалізації) | 2 |
 | C | Мок-сервер із OpenAPI + генерація типів; каркас Next.js | 3 |
-| D | Схема БД v1 (runs, events, tenants, secrets), міграції, CI, docker-compose | 4 |
+| D | Схема БД v1 (runs, events, tenants, secrets, devices), міграції, CI, docker-compose | 4 |
 
 **Гейт:** контракти заморожені, мок-API віддає `/v1/runs`, `pnpm build` зелений.
 
@@ -63,7 +64,7 @@
 | A | Executor + ReAct-цикл (заглушка планувальника), 1 інструмент `http.fetch` |
 | B | Мок-CRM (`json-server`), мок-сайт (3 сторінки: чиста / CF-заглушка / змінена верстка) |
 | C | Чат + SSE-стрім + простий timeline |
-| D | Auth: signup/login/verify/reset (§7.8), тенанти, RLS-каркас, event store, OTel |
+| D | Auth: signup/login/verify/reset (§7.8); **OAuth2+PKCE для мобільного** (§34.4.1); RLS-каркас, OTel |
 
 **Гейт:** запит → план-заглушка → `http.fetch` → відповідь у UI → подія в БД.
 
@@ -71,7 +72,7 @@
 
 | Трек | Завдання |
 |---|---|
-| A | Router (GoalSpec), Planner (DAG), Scheduler (топосорт, fan-out), budget guard |
+| A | Router, Planner (DAG), Scheduler; **jobs-polling API** + `/v1/meta` (§34.4.2, §34.4.7) |
 | B | `documents`: конвеєр ingest → OCR (Tesseract) на фікстурах |
 | C | Показ плану, статуси задач, **Stop (3 рівні)**; історія чатів: conversations/messages (§32.5) |
 | D | RLS на всі таблиці + SQL-тести ізоляції, аудит-лог; пошта (Resend): підтвердження, скидання, інвайти |
@@ -85,7 +86,7 @@
 | A | gVisor (runsc), `network=none`, egress-проксі з allowlist, `sandbox.exec/install` |
 | B | `documents`: схеми полів, валідація (арифметика, ЄДРПОУ), парсинг цін |
 | C | Артефакти: перегляд, скачування, галерея |
-| D | Детектор втечі (metadata/RFC1918), ліміти cgroups, MinIO + signed URL |
+| D | Детектор втечі, ліміти cgroups, MinIO + **presigned multipart upload** (§34.4.3) |
 
 **Гейт:** спроба `curl 169.254.169.254` блокується; артефакт створюється й доступний.
 
@@ -162,7 +163,7 @@
 |---|---|
 | A | Recipe engine (план із шаблону, без виклику дорогої моделі) |
 | B | 10 рецептів + `reporting`; **розклад** (§32.6) з оцінкою вартості й часовим поясом; центр нагадувань (§32.7) |
-| C | Галерея рецептів, онбординг «перший результат до підключень» |
+| C | Галерея рецептів, онбординг; **delta sync `?updated_since=`** (§34.4.4) |
 | D | Feature flags, kill switches, адмінка; **юридичні сторінки** (§7.10.1): Terms, Privacy, DPA, AUP, refund, cookie consent, версійованість |
 
 **Гейт:** новий користувач отримує реальний результат за ≤ 3 хвилини без підключення акаунтів.
@@ -513,3 +514,20 @@ merge у main
 | Чи платять гроші | Ринок | Ти |
 
 Усе інше — моя робота.
+
+---
+
+## 10. Phase 2 — нативний iOS (після релізу)
+
+Не входить у 16 тижнів. Стартує після стабільного веба. Оцінка: ~9–11 тижнів + рев'ю (§34.8).
+
+| Етап | Обсяг |
+|---|---|
+| P1 Skeleton | auth, список run'ів, результати — 2 тижні |
+| P2 Camera | захоплення чеків, Vision OCR, фоновий upload — 1.5 тижня |
+| P3 Push | APNs, категорії з діями, тихі години — 1 тиждень |
+| P4 Offline | SQLite, кеш файлів, outbox — 1.5 тижня |
+| P5 Полірування | віджети, Share Extension, Face ID — 1.5 тижня |
+| P6 Рев'ю | демо-акаунт, метадані, виправлення — 1–3 тижні |
+
+**Що вже зроблено зараз:** 9 архітектурних рішень (ARCHITECTURE §34.3) за 4 дні.

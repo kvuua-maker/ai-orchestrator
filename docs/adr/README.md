@@ -97,8 +97,12 @@ A good ADR fits on one screen. If it needs three, the decision is probably two d
 | 0061 | PgBouncer in transaction mode is mandatory from day one | Accepted |
 | 0062 | Artifact is registered in DB only after a complete S3 write | Accepted |
 | 0063 | Migrations: expand→contract, N-1 compatible, PITR marker before deploy | Accepted |
+| 0064 | Web is a client of the public API, otherwise mobile duplicates logic | Accepted |
+| 0065 | Mobile: token auth + PKCE, jobs polling instead of SSE | Accepted |
+| 0066 | Secrets never reach the device | Accepted |
+| 0067 | Hybrid OCR: on-device Vision → server-side structuring | Accepted |
 
-Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §34.1 and a
+Each row above has a matching section in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §35.1 and a
 full argument in the relevant chapter.
 
 ## When to write one
