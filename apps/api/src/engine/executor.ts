@@ -11,8 +11,9 @@ import { createLlm, type LlmClient } from "./llm.js";
 import { createPlanner } from "./planner.js";
 import { createRouter } from "./router.js";
 import { runPlan } from "./scheduler.js";
-import { finalizeReply } from "../conversation/brain.js";
+import { streamFinale } from "../conversation/brain.js";
 import { addMessage } from "../conversation/store.js";
+import { bus } from "../conversation/bus.js";
 
 export interface Engine {
   enqueue(runId: string, tenantId: string): void;
@@ -86,6 +87,10 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
     }
 
     const findings: string[] = [];
+    const convId = (run as any).conversation_id as string | null;
+    const publishStep = (label: string, status: "running" | "done" | "failed", icon?: string) => {
+      if (convId) bus.publish(convId, { type: "step", runId, label, status, icon });
+    };
 
     const schedule = await runPlan(plan, async (node: TaskNode): Promise<TaskResult> => {
       const t0 = Date.now();
@@ -94,6 +99,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
         await updateTask(q, node.id, "running");
         await appendEvent(q, runId, "task.started", { taskId: node.id, agent: node.agent, goal: node.goal });
       });
+      publishStep(node.goal, "running", "⏳");
 
       const out: TaskResult = {
         status: "success", summary: node.goal, artifacts: [], evidence: [], blockers: [], nextHints: [],
@@ -135,6 +141,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           const d = res.data as any;
           if (d?.text) findings.push(String(d.text).slice(0, 400));
           out.summary = `Отримано ${d?.bytes ?? 0} байт (HTTP ${d?.status ?? "?"})`;
+          publishStep(d?.bytes ? `Прочитав ${d.bytes} байт (HTTP ${d.status})` : node.goal, "done", "✓");
         } else {
           await step((q) => appendEvent(q, runId, "tool.result", {
             taskId: node.id, tool: toolName, ok: false, summary: res.error.code }));
@@ -145,6 +152,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           });
           out.status = "blocked";
           out.summary = `Зупинка: ${verdict.reason}`;
+          publishStep(`Не вдалося: ${verdict.reason}`, "failed", "✕");
           out.blockers.push(verdict.message);
 
           if (verdict.kind === "needs_human" || verdict.kind === "hard_limit") {
@@ -170,6 +178,7 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
       }
 
       out.metrics = { steps: 1, tokens: 0, costUsd: node.estCostUsd, durationMs: Date.now() - t0 };
+      if (out.status === "success") publishStep(node.goal, "done", "✓");
       await step(async (q) => {
         await updateTask(q, node.id, out.status === "success" ? "done" : out.status === "failed" ? "failed" : "skipped");
         await appendEvent(q, runId, "task.finished", { taskId: node.id, status: out.status, ms: out.metrics.durationMs });
@@ -249,16 +258,24 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
     const findings: string[] = Array.isArray(result?.data?.findings) ? result.data.findings : [];
     const handoff = await db.tx(tenantId, (q) => getPendingHandoff(q, runId));
 
-    const reply = await finalizeReply(llm, {
+    const messageId = `msg_fin_${Date.now().toString(36)}`;
+    bus.publish(convId, { type: "message.start", messageId, role: "assistant", meta: { intent: "result", runId } });
+    let reply = "";
+    for await (const chunk of streamFinale(llm, {
       request: run.prompt, status: run.status,
       summary: String(result?.summary ?? ""), findings,
       handoffQuestion: handoff?.question ?? null,
-    });
+    })) {
+      reply += chunk;
+      bus.publish(convId, { type: "message.delta", messageId, text: chunk });
+    }
+    if (!reply.trim()) reply = run.status === "done" ? `Готово. ${result?.summary ?? ""}` : `Задача зупинилась: ${result?.summary ?? run.status}`;
 
     await db.tx(tenantId, (q) => addMessage(q, {
       tenantId, conversationId: convId, role: "assistant", content: reply, runId,
       meta: { intent: "result", status: run.status, tasks: tasks.length, handoff: handoff?.id ?? null },
     }));
+    bus.publish(convId, { type: "message.done", messageId: `msg_fin_${Date.now().toString(36)}`, content: reply });
     await db.tx(tenantId, (q) => appendEvent(q, runId, "answer.ready", { conversationId: convId, chars: reply.length })).catch(() => {});
   }
 

@@ -3,91 +3,101 @@ import { PERSONA, TOOLS_SUMMARY } from "./persona.js";
 
 export type Intent = "answer" | "clarify" | "act";
 
-export interface TurnDecision {
+export interface TurnPlan {
   intent: Intent;
-  reply: string;
   plan?: string[];
   options?: string[];
 }
 
 export interface HistoryItem { role: "user" | "assistant"; content: string }
 
-/**
- * Один виклик LLM на хід: визначає намір і одразу пише відповідь.
- * JSON, бо нам потрібні структуровані plan/options, а не вільний текст.
- */
-export async function decideTurn(
+const RE_FACT_HINT = /мене звати|мене зовут|мій |моя |моє |мої |постачальник|клієнт|працюю з|запам'ятай|наша компанія|наш |наше /i;
+
+/** Фаза 1: швидко визначити намір (маленька відповідь, без тексту). */
+export async function classifyTurn(
   llm: LlmClient,
   input: { text: string; history: HistoryItem[] },
-): Promise<TurnDecision> {
-  const historyText = input.history.slice(-8)
-    .map((m) => `${m.role === "user" ? "Клієнт" : "Ти"}: ${m.content.slice(0, 600)}`)
-    .join("\n");
+): Promise<TurnPlan> {
+  const historyText = input.history.slice(-6)
+    .map((m) => `${m.role === "user" ? "Клієнт" : "Ти"}: ${m.content.slice(0, 400)}`).join("\n");
 
-  const out = await llm.json<Partial<TurnDecision>>({
-    system: `${PERSONA}
-
-${TOOLS_SUMMARY}
-
-## Формат відповіді
-Поверни ЛИШЕ JSON:
-{
-  "intent": "answer" | "clarify" | "act",
-  "reply": "текст у Markdown, який побачить людина",
-  "plan": ["крок 1", "крок 2"],        // тільки для intent=act
-  "options": ["варіант 1", "варіант 2"] // тільки для intent=clarify
-}
-
-Правила вибору intent:
-- answer — питання про тебе, порада, пояснення. Нічого виконувати не треба.
-- clarify — бракує даних: незрозуміло який сайт, який період, який формат файлу.
-- act — є конкретна дія: перевірити сайт, розпізнати документ, зробити звіт.
-
-Для act у reply спочатку привітання-план: «Я зрозумів. План: ...» і заверши «Починаю.».
-Не додавай у reply службових слів і не згадуй JSON.`,
-    user: historyText ? `Історія розмови:\n${historyText}\n\nНове повідомлення клієнта:\n${input.text}` : input.text,
-    maxTokens: 900,
+  const out = await llm.json<Partial<TurnPlan>>({
+    system: `Ти — диспетчер AI-Orchestrator. Визнач намір повідомлення клієнта.
+Поверни ЛИШЕ JSON: {"intent":"answer|clarify|act","plan":["..."],"options":["..."]}
+- answer — питання, порада, пояснення: нічого виконувати не треба.
+- clarify — бракує даних (який сайт, період, формат).
+- act — конкретна дія: перевірити сайт, розпізнати документ, зробити звіт.
+plan — лише для act: 2–4 короткі кроки українською.
+options — лише для clarify: 2–4 конкретні варіанти.`,
+    user: historyText ? `Історія:\n${historyText}\n\nНове повідомлення:\n${input.text}` : input.text,
+    maxTokens: 250,
   });
 
   const intent: Intent = out?.intent === "clarify" || out?.intent === "act" ? out.intent : "answer";
-  const reply = String(out?.reply ?? "").trim();
-  if (!reply) {
-    return {
-      intent: "answer",
-      reply: "Вибачте, не зрозумів запит. Сформулюйте, будь ласка, інакше — або скажіть, що саме треба зробити.",
-    };
-  }
   return {
-    intent, reply,
-    plan: Array.isArray(out?.plan) ? out!.plan!.map(String).slice(0, 6) : undefined,
+    intent,
+    plan: Array.isArray(out?.plan) ? out!.plan!.map(String).slice(0, 5) : undefined,
     options: Array.isArray(out?.options) ? out!.options!.map(String).slice(0, 4) : undefined,
   };
 }
 
-/** Фінальний підсумок після виконання задачі — теж людською мовою. */
-export async function finalizeReply(
+/** Фаза 2: потокова відповідь людською мовою. */
+export async function* streamReply(
+  llm: LlmClient,
+  input: { text: string; history: HistoryItem[]; plan: TurnPlan; facts: string[] },
+): AsyncGenerator<string> {
+  const historyText = input.history.slice(-8)
+    .map((m) => `${m.role === "user" ? "Клієнт" : "Ти"}: ${m.content.slice(0, 500)}`).join("\n");
+
+  const taskHint =
+    input.plan.intent === "act"
+      ? `Це задача з діями. Напиши 2–3 речення: що зрозумів і короткий план${input.plan.plan?.length ? ` (${input.plan.plan.join("; ")})` : ""}, і заверши словом «Починаю.»`
+      : input.plan.intent === "clarify"
+        ? `Бракує даних. Постав ОДНЕ коротке уточнююче питання (1–2 речення). Варіанти покаже інтерфейс, у тексті їх не перелічуй.`
+        : `Це питання. Дай змістовну відповідь у Markdown (до 8 рядків), з конкретними прикладами.`;
+
+  const factsBlock = input.facts.length
+    ? `\n\n## Факти про клієнта (з твоєї пам'яті)\n${input.facts.map((f) => `- ${f}`).join("\n")}\n\nЯкщо у цих фактах є відповідь на питання — відповідай на їх основі. Не кажи «не знаю», якщо факт є вище.`
+    : "";
+
+  const userPrompt = `${historyText ? `Історія розмови:\n${historyText}\n\n` : ""}Нове повідомлення клієнта:\n${input.text}\n\n[Завдання: ${taskHint}]`;
+
+  for await (const chunk of llm.stream({ system: `${PERSONA}\n\n${TOOLS_SUMMARY}${factsBlock}`, user: userPrompt, maxTokens: 900 })) {
+    yield chunk;
+  }
+}
+
+/** Витяг довготривалих фактів про клієнта (для пам'яті). */
+export async function extractFacts(llm: LlmClient, text: string): Promise<string[]> {
+  if (!RE_FACT_HINT.test(text) && text.length < 40) return [];
+  const out = await llm.json<{ facts?: string[] }>({
+    system: `Витягни з повідомлення факти про клієнта, які варто пам'ятати назавжди
+(ім'я, компанія, постачальники, формати роботи, вподобання). Ігноруй разові задачі.
+Поверни ЛИШЕ JSON: {"facts":["..."]}. Якщо фактів немає — {"facts":[]}.`,
+    user: text,
+    maxTokens: 200,
+  });
+  const facts = Array.isArray(out?.facts) ? out!.facts!.map(String).filter((f) => f.length > 3 && f.length < 200) : [];
+  return facts.slice(0, 5);
+}
+
+/** Фінальний підсумок після виконання задачі. */
+export async function* streamFinale(
   llm: LlmClient,
   input: { request: string; status: string; summary: string; findings: string[]; handoffQuestion?: string | null },
-): Promise<string> {
-  const out = await llm.json<{ reply?: string }>({
-    system: `${PERSONA}
-
-${TOOLS_SUMMARY}
-
-## Зараз
-Ти щойно виконав задачу. Напиши клієнту підсумок у Markdown (3–6 рядків):
-що вийшло, які цифри/факти отримано, що робити далі. Без технічних деталей.
-Поверни ЛИШЕ JSON: {"reply": "..."}`,
-    user: `Запит: ${input.request}
+): AsyncGenerator<string> {
+  const user = `Запит: ${input.request}
 Статус: ${input.status}
 Підсумок рушія: ${input.summary}
 Знайдене: ${input.findings.slice(0, 5).join(" | ") || "—"}
-${input.handoffQuestion ? `Питання до людини: ${input.handoffQuestion}` : ""}`,
-    maxTokens: 600,
-  });
-  const reply = String(out?.reply ?? "").trim();
-  if (reply) return reply;
-  return input.status === "done"
-    ? `Готово. ${input.summary}`
-    : `Задача зупинилась: ${input.summary}`;
+${input.handoffQuestion ? `Питання до людини: ${input.handoffQuestion}` : ""}
+
+Напиши клієнту підсумок у Markdown (3–6 рядків): що вийшло, які цифри/факти, що далі.`;
+
+  for await (const chunk of llm.stream({
+    system: `${PERSONA}\n\n${TOOLS_SUMMARY}\n\nТи щойно виконав задачу. Пиши лише підсумок, без плану.`,
+    user, maxTokens: 500,
+  })) {
+    yield chunk;
+  }
 }

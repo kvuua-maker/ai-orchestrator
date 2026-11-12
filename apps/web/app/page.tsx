@@ -22,6 +22,8 @@ export default function ChatPage() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [streaming, setStreaming] = useState<{ id: string; text: string } | null>(null);
+  const [steps, setSteps] = useState<Array<{ label: string; status: string; icon?: string }>>([]);
   const [busyRun, setBusyRun] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sidebar, setSidebar] = useState(false);
@@ -66,6 +68,32 @@ export default function ChatPage() {
       setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
       if (m.role === "assistant") { setBusyRun(null); setThinking(false); }
     });
+    es.addEventListener("message.start", (e: any) => {
+      const d = JSON.parse(e.data);
+      setThinking(false);
+      setStreaming({ id: d.messageId, text: "" });
+    });
+    es.addEventListener("message.delta", (e: any) => {
+      const d = JSON.parse(e.data);
+      setStreaming((s) => ({ id: d.messageId, text: (s && s.id === d.messageId ? s.text : "") + d.text }));
+    });
+    es.addEventListener("message.done", (e: any) => {
+      const d = JSON.parse(e.data);
+      setStreaming(null);
+      setMsgs((prev) => (prev.some((x) => x.id === d.messageId) ? prev
+        : [...prev, { id: d.messageId, role: "assistant", content: d.content, meta: d.meta, created_at: new Date().toISOString() }]));
+      setBusyRun(null);
+    });
+    es.addEventListener("step", (e: any) => {
+      const d = JSON.parse(e.data);
+      setSteps((prev) => {
+        const next = [...prev];
+        const i = next.findIndex((x) => x.label === d.label);
+        if (i >= 0) next[i] = { label: d.label, status: d.status, icon: d.icon };
+        else next.push({ label: d.label, status: d.status, icon: d.icon });
+        return next;
+      });
+    });
     es.onerror = () => es.close();
     esRef.current = es;
     return () => es.close();
@@ -78,14 +106,15 @@ export default function ChatPage() {
     if (!value || thinking) return;
     let cid = convId;
     if (!cid) cid = await newConv();
-    setText(""); setError(null); setThinking(true);
+    setText(""); setError(null); setThinking(true); setSteps([]); setStreaming(null);
     const tempUser: Msg = { id: `tmp-${Date.now()}`, role: "user", content: value, created_at: new Date().toISOString() };
     setMsgs((m) => [...m, tempUser]);
     try {
-      const r = await api<{ assistantMessage: { id: string; content: string; meta: any }; runId: string | null; intent: string }>(
+      const r = await api<{ messageId: string; content: string; runId: string | null; intent: string; plan?: string[]; options?: string[] }>(
         `/v1/conversations/${cid}/messages`, { method: "POST", body: JSON.stringify({ text: value }) });
-      setMsgs((m) => [...m, { id: r.assistantMessage.id, role: "assistant", content: r.assistantMessage.content, meta: r.assistantMessage.meta, run_id: r.runId, created_at: new Date().toISOString() }]);
-      setThinking(false);
+      setMsgs((m) => (m.some((x) => x.id === r.messageId) ? m
+        : [...m, { id: r.messageId, role: "assistant", content: r.content, meta: { intent: r.intent, plan: r.plan, options: r.options }, run_id: r.runId, created_at: new Date().toISOString() }]));
+      setThinking(false); setStreaming(null);
       if (r.runId) setBusyRun(r.runId);
       loadConvs();
     } catch (e: any) {
@@ -144,6 +173,26 @@ export default function ChatPage() {
             {msgs.map((m) => <Bubble key={m.id} msg={m} onPick={send} />)}
 
             {thinking && <Typing />}
+            {streaming && (
+              <div style={{ display: "flex", gap: 10, margin: "10px 0" }}>
+                <Avatar />
+                <div style={{ maxWidth: "78%", background: "#12151d", border: "1px solid #232838", borderRadius: "14px 14px 14px 4px", padding: "11px 14px", fontSize: 14, lineHeight: 1.62 }}>
+                  <MarkdownView text={streaming.text} />
+                  <span style={{ display: "inline-block", width: 7, height: 15, background: "#4f7cff", marginLeft: 2, animation: "caret .9s steps(1) infinite", verticalAlign: "text-bottom" }} />
+                  <style>{`@keyframes caret{50%{opacity:0}}`}</style>
+                </div>
+              </div>
+            )}
+            {steps.length > 0 && (
+              <div style={{ margin: "4px 0 10px 40px", display: "grid", gap: 4 }}>
+                {steps.map((s, i) => (
+                  <div key={`${s.label}-${i}`} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: s.status === "failed" ? "#ff9b9b" : s.status === "running" ? "#8b93a7" : "#7fc9a6" }}>
+                    <span style={{ width: 14, textAlign: "center" }}>{s.icon ?? (s.status === "running" ? "⏳" : "✓")}</span>
+                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "70%" }}>{s.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {busyRun && !thinking && (
               <div style={{ fontSize: 11, color: "#5f677a", margin: "8px 0 0 44px" }}>
                 виконую задачу… результат з'явиться тут автоматично

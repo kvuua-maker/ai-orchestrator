@@ -9,6 +9,7 @@ import {
 import { createDb, seed, type Db, type QueryFn } from "./db/index.js";
 import { createEngine, type Engine } from "./engine/executor.js";
 import { createLlm } from "./engine/llm.js";
+import { bus } from "./conversation/bus.js";
 import { createRegistry } from "./tools/index.js";
 import { createEmbedder } from "./memory/embedder.js";
 import { getPendingHandoff, listHandoffs, resolveHandoff } from "./engine/handoff.js";
@@ -460,7 +461,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const conv = await db.tx(req.tenantId, (q) => getConversation(q, req.params.id));
     if (!conv) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "conversation not found" } });
 
-    const result = await runTurn(db, llm, engine, {
+    const result = await runTurn(db, llm, embedder, engine, {
       tenantId: req.tenantId, userId: DEFAULT_USER, conversationId: conv.id, text: body.data.text,
     });
     metrics.inc("aio_turns_total", { intent: result.intent });
@@ -476,6 +477,14 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     let lastMsgAt = new Date(0).toISOString();
     const send = (event: string, data: unknown) =>
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    // потік токенів і кроків — через шину, без опитування БД
+    const unsubscribe = bus.subscribe(convId, (e) => {
+      if (closed) return;
+      send(e.type, e);
+      if (e.type === "message.done") lastMsgAt = new Date().toISOString();
+    });
+    req.raw.on("close", () => unsubscribe());
 
     const tick = async () => {
       if (closed) return;
@@ -542,12 +551,16 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     return reply.code(202).send({ runId: run.id, resumed: true });
   });
 
-  app.post("/v1/runs/reconcile", async (req: any) => {
+  app.post("/v1/runs/reconcile", async (req: any, reply) => {
     const body = z.object({ staleAfterMs: z.number().int().min(1000).optional(), allTenants: z.boolean().optional() }).safeParse(req.body ?? {});
     const staleAfterMs = body.success ? body.data.staleAfterMs : undefined;
     if (body.success && body.data.allTenants) {
       // фоновий обхід усіх тенантів — окрема сервісна роль (§22.5)
-      const svc = await createServiceDb();
+      let svc;
+      try { svc = await createServiceDb(); }
+      catch (e) {
+        return reply.code(503).send({ error: { code: "SERVICE_DB_UNAVAILABLE", message: "SERVICE_DATABASE_URL не налаштований" } });
+      }
       try { return await reconcileStalledRuns(svc, { staleAfterMs }); } finally { await svc.close(); }
     }
     return reconcileStalledRuns(db, { staleAfterMs, tenantId: req.tenantId });

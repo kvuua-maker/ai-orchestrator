@@ -32,7 +32,7 @@ export function heuristicGoal(prompt: string): GoalSpec {
   };
 }
 
-export function createRouter(llm: LlmClient = { name: "none", json: async () => null }) {
+export function createRouter(llm: LlmClient = { name: "none", json: async () => null, stream: async function* () {} }) {
   return {
     name: llm.name === "none" ? "heuristic" : llm.name,
     async route(prompt: string): Promise<RouteResult> {

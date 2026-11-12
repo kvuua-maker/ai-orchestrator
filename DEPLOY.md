@@ -100,21 +100,3 @@ API і Web слухають `127.0.0.1` — назовні не відкриті
 3. TLS (certbot) і `WEB_ORIGIN=https://<домен>` у `.env`, потім `systemctl restart aio-api aio-web`.
 
 Без домену я не чіпав nginx — щоб не зачепити конфігурацію MarketApp/Vakansio.
-
-## Оновлення схеми БД (важливо)
-
-Після будь-якого `db-bootstrap.mjs` **обов'язково** перегенерувати userlist PgBouncer:
-
-```bash
-cd /mnt/HC_Volume_106461592/aio
-docker exec aio-postgres-1 psql -U aio -d aio -tAF'|' \
-  -c "SELECT rolname, rolpassword FROM pg_authid WHERE rolname IN ('aio','aio_app','aio_svc')" \
-  | python3 -c "
-import sys
-lines=[l.rstrip().split('|',1) for l in sys.stdin if '|' in l]
-open('/mnt/HC_Volume_106461592/aio/pgbouncer/userlist.txt','w').write('\n'.join(f'\"{n}\" \"{v}\"' for n,v in lines)+'\n')"
-chown 70:70 pgbouncer/userlist.txt && chmod 600 pgbouncer/userlist.txt
-docker compose restart pgbouncer && systemctl restart aio-api
-```
-
-`ALTER ROLE ... PASSWORD` генерує новий SCRAM-хеш, і PgBouncer зі старим файлом відмовляє в доступі.
