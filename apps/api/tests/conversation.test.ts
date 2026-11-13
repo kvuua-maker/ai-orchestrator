@@ -67,9 +67,10 @@ describe("Діалог (стрімінг)", () => {
     const app = await buildApp(); await app.ready();
     const conv = await newConv(app);
     const b = (await app.inject({ method: "POST", url: `/v1/conversations/${conv.id}/messages`, headers: H, payload: { text: "перевір ціни" } })).json();
-    expect(b.intent).toBe("act");          // clarify зведено до act
-    expect(b.runId).toMatch(/^run_/);      // задача стартувала одразу
-    expect(b.content).toContain("Починаю");
+    // нова архітектура: модель сама вирішує; окремого run для чату більше немає
+    expect(b.intent).toBe("answer");
+    expect(b.content.length).toBeGreaterThan(10);
+    expect(b.runId ?? null).toBeNull();
     expect(b.options ?? []).toHaveLength(0);
     await app.close();
   }, 30_000);
@@ -80,13 +81,13 @@ describe("Діалог (стрімінг)", () => {
     const app = await buildApp(); await app.ready();
     const conv = await newConv(app);
     const b = (await app.inject({ method: "POST", url: `/v1/conversations/${conv.id}/messages`, headers: H, payload: { text: "Перевір https://example.com" } })).json();
-    expect(b.intent).toBe("act");
-    expect(b.runId).toMatch(/^run_/);
-    expect(String(b.content).length).toBeGreaterThan(20);   // план у тексті, не в масиві (швидкий шлях)
+    expect(b.intent).toBe("answer");
+    expect(String(b.content).length).toBeGreaterThan(10);
+    expect(b.runId ?? null).toBeNull();
     await app.engine.drain();
     const msgs = (await app.inject({ method: "GET", url: `/v1/conversations/${conv.id}`, headers: H })).json().messages;
-    expect(msgs.length).toBeGreaterThanOrEqual(3);
-    expect(msgs.some((m: any) => m.meta?.intent === "result")).toBe(true);
+    expect(msgs.length).toBeGreaterThanOrEqual(2);   // нова архітектура: без окремого повідомлення-плану
+    expect(msgs.some((m: any) => m.role === "assistant" && String(m.content).length > 5)).toBe(true);
     await app.close();
   }, 60_000);
 

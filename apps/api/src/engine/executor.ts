@@ -197,8 +197,8 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
               await ensureLiveBrowser(url || undefined);
               const v = vncInfo();
               if (v.url) {
-                verdict.question = `Сайт показує перевірку безпеки. Відкрийте живий браузер: ${v.url}/vnc.html?autoconnect=1&resize=scale `
-                  + `(пароль VNC: ${v.password}). Пройдіть перевірку там — потім натисніть «Продовжити», і я працюватиму в цій самій сесії з вашими cookies.`;
+                verdict.question = `${verdict.question}\n\nЖивий браузер: ${v.url}/vnc.html?autoconnect=1&resize=scale `
+                  + `(пароль VNC: ${v.password}). Пройдіть перевірку там — потім натисніть «Продовжити», і я працюватиму в тій самій сесії з вашими cookies.`;
                 publishStep("Відкрив живий браузер для вас", "done", "🖥");
                 // зупиняємось і чекаємо людину: жодних «альтернатив» замість її сайту
                 out.status = "blocked";

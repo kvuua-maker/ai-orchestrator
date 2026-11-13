@@ -504,7 +504,7 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const conv = await db.tx(req.tenantId, (q) => getConversation(q, req.params.id));
     if (!conv) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "conversation not found" } });
 
-    const result = await runTurn(db, llm, embedder, engine, {
+    const result = await runTurn(db, llm, embedder, { ...engine, tools: registry, artifacts }, {
       tenantId: req.tenantId, userId: DEFAULT_USER, conversationId: conv.id, text: body.data.text,
     });
     metrics.inc("aio_turns_total", { intent: result.intent });
