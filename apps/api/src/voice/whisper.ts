@@ -92,7 +92,8 @@ export function preloadWhisper(): void {
 
 /** Groq: whisper-large-v3-turbo — найкраща точність для української, безкоштовний ліміт. */
 async function viaGroq(audio: Buffer, mime: string, lang: string): Promise<SttResult | null> {
-  const key = process.env.GROQ_API_KEY;
+  const { resolveKey } = await import("../integrations/store.js");
+  const key = resolveKey("groq") ?? process.env.GROQ_API_KEY;
   if (!key) return null;
   const t0 = Date.now();
   try {

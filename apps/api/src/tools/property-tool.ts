@@ -23,7 +23,8 @@ interface OwnerInfo {
 }
 
 async function viaOpendatabot(address: string): Promise<OwnerInfo | null> {
-  const key = process.env.OPENDATABOT_API_KEY;
+  const { resolveKey } = await import("../integrations/store.js");
+  const key = resolveKey("opendatabot") ?? process.env.OPENDATABOT_API_KEY;
   if (!key) return null;
   try {
     const res = await fetch(`https://api.opendatabot.com/api/v3/realestate/search?q=${encodeURIComponent(address)}&apiKey=${key}`,
@@ -45,7 +46,8 @@ async function viaOpendatabot(address: string): Promise<OwnerInfo | null> {
 }
 
 async function viaScanbe(address: string): Promise<OwnerInfo | null> {
-  const key = process.env.SCANBE_API_KEY;
+  const { resolveKey } = await import("../integrations/store.js");
+  const key = resolveKey("scanbe") ?? process.env.SCANBE_API_KEY;
   if (!key) return null;
   try {
     const res = await fetch(`https://scanbe.io/api/v1/realestate?address=${encodeURIComponent(address)}&key=${key}`,
@@ -96,7 +98,8 @@ export const propertyLookup = defineTool({
       const p = await fn(q).catch(() => null);
       if (p) return { data: { query: q, found: true, property: p, hint: null } };
     }
-    const hasKey = Boolean(process.env.OPENDATABOT_API_KEY || process.env.SCANBE_API_KEY);
+    const { resolveKey: rk } = await import("../integrations/store.js");
+    const hasKey = Boolean(rk("opendatabot") || rk("scanbe") || process.env.OPENDATABOT_API_KEY || process.env.SCANBE_API_KEY);
     return {
       data: {
         query: q, found: false, property: null,

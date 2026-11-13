@@ -22,6 +22,7 @@ import { runTurn } from "./conversation/turn.js";
 import { buildSuggestions } from "./conversation/proactive.js";
 import { preloadWhisper, transcribe } from "./voice/whisper.js";
 import { ensureLiveBrowser, liveStatus, vncInfo } from "./live/session.js";
+import { listIntegrations, removeKey, saveKey, testKey, loadKeys, resolveKey, PROVIDERS } from "./integrations/store.js";
 import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
@@ -471,6 +472,40 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const url = String((req.body as any)?.url ?? "").trim();
     const r = await ensureLiveBrowser(url || undefined);
     return { ...r, ...(await liveStatus()), ...vncInfo() };
+  });
+
+  // ── підключення зовнішніх сервісів ──
+  app.get("/v1/integrations", async (req: any) => {
+    const items = await db.tx(req.tenantId, async (q) => { await loadKeys(q); return listIntegrations(q); });
+    return { items };
+  });
+
+  app.put("/v1/integrations/:provider", async (req: any, reply) => {
+    const provider = String(req.params.provider);
+    if (!PROVIDERS.some((p) => p.id === provider)) {
+      return reply.code(404).send({ error: { code: "NOT_FOUND", message: "невідомий провайдер" } });
+    }
+    const body = z.object({ secret: z.string().min(8).max(300) }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(422).send({ error: { code: "VALIDATION_ERROR", message: "secret required" } });
+    const check = await testKey(provider, body.data.secret);
+    // невалідний ключ не зберігаємо — інакше він перекриє робочий з .env
+    if (!check.ok) return reply.code(422).send({ saved: false, check });
+    await db.tx(req.tenantId, (q) => saveKey(q, req.tenantId, provider, body.data.secret));
+    return { saved: true, check };
+  });
+
+  app.delete("/v1/integrations/:provider", async (req: any) => {
+    await db.tx(req.tenantId, (q) => removeKey(q, req.tenantId, String(req.params.provider)));
+    return { removed: true };
+  });
+
+  app.post("/v1/integrations/:provider/test", async (req: any) => {
+    const provider = String(req.params.provider);
+    const secret = String((req.body as any)?.secret ?? "");
+    const configured = await db.tx(req.tenantId, (q) => listIntegrations(q));
+    const item = configured.find((c) => c.id === provider);
+    if (!secret && !item?.configured) return { ok: false, message: "ключ не заданий", ms: 0 };
+    return testKey(provider, secret || resolveKey(provider) || "");
   });
 
   app.get("/v1/proactive", async (req: any) => {

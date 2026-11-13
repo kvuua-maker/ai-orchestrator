@@ -8,6 +8,7 @@ const NAV = [
   { href: "/runs", label: "Запуски" },
   { href: "/dashboard", label: "Метрики" },
   { href: "/billing", label: "Тариф" },
+  { href: "/settings", label: "Підключення" },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
