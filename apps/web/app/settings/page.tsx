@@ -14,9 +14,18 @@ export default function SettingsPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, string>>({});
+  const [google, setGoogle] = useState<{ connected: boolean; email: string | null; configured: boolean } | null>(null);
 
   const load = () => api<{ items: Item[] }>("/v1/integrations").then((d) => setItems(d.items)).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); api<any>("/v1/oauth/google/status").then(setGoogle).catch(() => setGoogle(null)); }, []);
+
+  async function connectGoogle() {
+    try {
+      const r = await api<{ configured: boolean; url: string | null; hint?: string }>("/v1/oauth/google/start");
+      if (!r.configured || !r.url) { setError(r.hint ?? "Google OAuth не налаштований"); return; }
+      window.location.href = r.url;
+    } catch (e: any) { setError(e.message); }
+  }
 
   async function save(id: string) {
     const secret = (drafts[id] ?? "").trim();
@@ -57,6 +66,29 @@ export default function SettingsPage() {
       </div>
       {error && <ErrorNote text={error} />}
       {!items && <Skeleton rows={4} />}
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, fontSize: 14.5 }}>Google — Drive і Gmail</span>
+              <Badge color={google?.connected ? "#3ecf8e" : "#8b93a7"} label={google?.connected ? "підключено" : "не підключено"} />
+              {google?.email && <span style={{ fontSize: 12, color: "#8b93a7" }}>{google.email}</span>}
+            </div>
+            <div style={{ fontSize: 13, color: "#aab2c5", marginTop: 4 }}>
+              пошук файлів на Drive, читання й надсилання листів у Gmail
+            </div>
+          </div>
+          <Button onClick={connectGoogle} disabled={!google?.configured}>
+            {google?.connected ? "Перепідключити Google" : "Підключити Google"}
+          </Button>
+        </div>
+        {!google?.configured && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#c9a227" }}>
+            Додайте GOOGLE_CLIENT_ID і GOOGLE_CLIENT_SECRET у .env (вже додано) і перезапустіть сервіс.
+          </div>
+        )}
+      </Card>
+
       <div style={{ display: "grid", gap: 12, marginTop: 8 }}>
         {items?.map((it) => (
           <Card key={it.id}>

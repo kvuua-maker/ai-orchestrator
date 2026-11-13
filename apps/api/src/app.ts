@@ -23,6 +23,7 @@ import { buildSuggestions } from "./conversation/proactive.js";
 import { preloadWhisper, transcribe } from "./voice/whisper.js";
 import { ensureLiveBrowser, liveStatus, vncInfo } from "./live/session.js";
 import { listIntegrations, removeKey, saveKey, testKey, loadKeys, resolveKey, PROVIDERS } from "./integrations/store.js";
+import { authUrl as googleAuthUrl, exchangeCode as googleExchange, saveTokensAndStore as googleSaveTokens, googleConfigured } from "./integrations/google.js";
 import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
@@ -506,6 +507,40 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const item = configured.find((c) => c.id === provider);
     if (!secret && !item?.configured) return { ok: false, message: "ключ не заданий", ms: 0 };
     return testKey(provider, secret || resolveKey(provider) || "");
+  });
+
+  // ── Google OAuth ──
+  app.get("/v1/oauth/google/start", async (req: any) => {
+    if (!googleConfigured()) {
+      return { configured: false, url: null, hint: "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI не задані" };
+    }
+    const state = Buffer.from(`${req.tenantId}:${Date.now()}`).toString("base64url");
+    return { configured: true, url: googleAuthUrl(state) };
+  });
+
+  app.get("/v1/oauth/google/status", async (req: any) => {
+    const { loadTokens } = await import("./integrations/google.js");
+    const tokens = await db.tx(req.tenantId, (q) => loadTokens(q, req.tenantId)).catch(() => null);
+    return { connected: Boolean(tokens), email: tokens?.email ?? null, configured: googleConfigured() };
+  });
+
+  app.get("/v1/oauth/google/callback", async (req: any, reply) => {
+    const code = String((req.query as any)?.code ?? "");
+    const err = String((req.query as any)?.error ?? "");
+    const state = String((req.query as any)?.state ?? "");
+    const tenantId = (() => { try { return Buffer.from(state, "base64url").toString().split(":")[0] || req.tenantId; } catch { return req.tenantId; } })();
+    const back = (ok: boolean, msg: string) => reply.redirect(`/settings?google=${ok ? "ok" : "error"}&msg=${encodeURIComponent(msg).slice(0, 120)}`);
+    if (err) return back(false, err);
+    if (!code) return back(false, "немає коду авторизації");
+    try {
+      const tokens = await googleExchange(code);
+      await googleSaveTokens(tenantId, tokens);
+      await db.tx(tenantId, (q) => writeAudit(q, { tenantId, actorType: "user", actorId: DEFAULT_USER,
+        action: "google.connected", resource: "integration", resourceId: "google", traceId: req.traceId, ip: req.ip, meta: { email: tokens.email ?? null } }));
+      return back(true, tokens.email ?? "підключено");
+    } catch (e: any) {
+      return back(false, String(e?.message ?? e).slice(0, 100));
+    }
   });
 
   app.get("/v1/proactive", async (req: any) => {

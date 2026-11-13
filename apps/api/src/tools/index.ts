@@ -17,6 +17,7 @@ import { videoCreate } from "./video-tool.js";
 import { crmCreateLead } from "./crm-tool.js";
 import { novaposhtaTrack, novaposhtaCreateTtn } from "./novaposhta-tool.js";
 import { billingStatus } from "./billing-tool.js";
+import { googleDriveSearch, googleGmailSearch, googleGmailSend } from "./google-tool.js";
 import { createMemoryTools } from "./memory-tool.js";
 
 export interface RegistryDeps { db?: Db; embedder?: Embedder }
@@ -40,6 +41,9 @@ export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
     .register(novaposhtaTrack)
     .register(novaposhtaCreateTtn)
     .register(billingStatus)
+    .register(googleDriveSearch)
+    .register(googleGmailSearch)
+    .register(googleGmailSend)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)

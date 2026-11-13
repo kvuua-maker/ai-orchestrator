@@ -322,30 +322,27 @@ Docker і `apt` недоступні (sandbox), тому Postgres і PgBouncer �
 **Не готово до платежу без додаткової роботи:** gVisor наживо, реальна LLM-автономність на живих сайтах,
 пентест, відновлення з бекапу, платіжні вебхуки. Усі п'ять — у розділі «Що НЕ перевірено» чек-ліста.
 
-## 0.42. Аудит модулів: відео, CRM, Нова Пошта, білінг (2026-11-13)
+## 0.43. Google OAuth: Drive і Gmail (2026-11-13)
 
-Розрив між архітектурою і чатом закрито: **21 інструмент** у реєстрі, 21 підключений до чату.
+| Що | Стан |
+|---|---|
+| Ключі в `.env` | додано `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` |
+| OAuth-потік | `/v1/oauth/google/start` → consent → `/v1/oauth/google/callback` → токени |
+| Зберігання | `integrations` (provider=google), AES-256-GCM, refresh_token |
+| Автооновлення | `freshAccessToken()` оновлює токен за 60 с до кінця |
+| Інструменти | `google.drive_search`, `google.gmail_search`, `google.gmail_send` |
+| UI | картка «Google — Drive і Gmail» + кнопка «Підключити Google» |
 
-| Модуль | Було | Стало |
-|---|---|---|
-| **Відео** | ❌ не існувало | ✅ `video.create` — ffmpeg, кадри Pexels (опційно), субтитри, музика, MP4-артефакт |
-| **CRM** | ❌ | ✅ `crm.create_lead` — KeyCRM API |
-| **Нова Пошта** | ❌ | ✅ `novaposhta.track`, `novaposhta.create_ttn` |
-| **Білінг** | лише REST | ✅ `billing.status` (REST + RLS-контекст) |
-| **Документи** | `documents.folders` не в чаті | ✅ усі 4 інструменти в чаті |
-| **Google (Drive/Gmail/Calendar)** | ❌ | ❌ потребує OAuth-креденшлів від користувача |
+Scopes: `drive.readonly`, `gmail.readonly`, `gmail.send`, `openid email`.
 
-### Знайдені дефекти
+**Потрібно від користувача:** додати redirect URI у Google Console —
+`https://favorite-participate-personnel-agenda.trycloudflare.com/v1/oauth/google/callback`
 
-1. **`video.create` падав** на `drawbox=y=H-150` — ffmpeg не знає змінної `H`, треба `ih`. Агент робив 5 повторних викликів і йшов у дедлайн.
-2. **`billing.status` показував «тариф не активовано»** — RLS без `app.tenant_id` повертав 0 рядків. Додано `set_config` у транзакції.
+### Безпека
 
-### Перевірено
+`GOOGLE_CLIENT_SECRET` був надісланий у чаті відкритим текстом — рекомендовано ротувати після першого успішного підключення.
 
-- Відео через чат: **12-секундний MP4**, 3 сцени, посилання на артефакт, 23.5 с
-- Білінг через чат: Business, 2186/10000, $6.03
-- Агент перелічує всі модулі у відповіді на «що ти вмієш»
-- 121 тест зелений (1 opt-in пропущено)
+121 тест зелений.
 
 ## 1. Команда і треки
 
