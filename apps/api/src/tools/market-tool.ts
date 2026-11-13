@@ -96,7 +96,7 @@ export const marketPrices = defineTool({
   }),
   risk: "read", effectClass: "pure", costClass: "cheap",
   scopes: ["browser:read"], agents: ["browser", "data", "synthesizer", "verifier"],
-  timeoutMs: 120_000, maxRetries: 0,
+  timeoutMs: 30_000, maxRetries: 0,
   async execute({ query, minPrice, maxResults }) {
     const { getBrowser } = await import("./browser-tool.js");
     const browser: any = await getBrowser();
@@ -113,7 +113,7 @@ export const marketPrices = defineTool({
       const pages = await Promise.all(SOURCES.map(async (src) => {
         const page = await ctx.newPage();
         try {
-          const resp = await page.goto(src.url(query), { waitUntil: "domcontentloaded", timeout: 25_000 });
+          const resp = await page.goto(src.url(query), { waitUntil: "domcontentloaded", timeout: 10_000 });
           await page.waitForLoadState("networkidle", { timeout: 2500 }).catch(() => {});
           await page.waitForTimeout(700);
           if ((resp?.status() ?? 0) >= 400) return { src, rows: [] as any[], ok: false };

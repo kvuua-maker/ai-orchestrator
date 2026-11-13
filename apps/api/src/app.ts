@@ -539,6 +539,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     });
     let closed = false;
     req.raw.on("close", () => { closed = true; });
+    // keep-alive: Cloudflare обриває «тихі» з'єднання близько 100 с
+    const ping = setInterval(() => { if (!closed) { try { reply.raw.write(": ping\n\n"); } catch { /* ignore */ } } }, 10_000);
+    req.raw.on("close", () => clearInterval(ping));
     let lastMsgAt = new Date(0).toISOString();
     const send = (event: string, data: unknown) =>
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);

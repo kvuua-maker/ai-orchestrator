@@ -49,7 +49,7 @@ export const browserOpen = defineTool({
   }),
   risk: "read", effectClass: "pure", costClass: "cheap",
   scopes: ["browser:read"], agents: ["browser", "data", "verifier", "synthesizer"],
-  timeoutMs: 60_000, maxRetries: 0,
+  timeoutMs: 20_000, maxRetries: 0,
   async execute({ url, waitMs, scroll }) {
     // якщо користувач уже пройшов перевірку у «живому браузері» — працюємо в тій самій сесії
     const { fetchViaLive } = await import("../live/session.js");
@@ -68,7 +68,7 @@ export const browserOpen = defineTool({
     const page = await ctx.newPage();
     try {
       let status = 0;
-      const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
+      const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 });
       status = resp?.status() ?? 0;
       await page.waitForLoadState("networkidle", { timeout: 2500 }).catch(() => {});
       await page.waitForTimeout(waitMs ?? 700);

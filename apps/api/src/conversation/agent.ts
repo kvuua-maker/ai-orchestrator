@@ -31,6 +31,7 @@ export interface AgentTurnInput {
 }
 
 export interface AgentTurnResult {
+  deadlineHit?: boolean;
   content: string;
   toolCalls: Array<{ name: string; ok: boolean }>;
   iterations: number;
@@ -81,9 +82,16 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   let content = "";
   let iterations = 0;
   const maxSteps = input.maxSteps ?? 5;
+  // жорсткий дедлайн на весь хід: краще відповісти частково, ніж отримати 524
+  const DEADLINE_MS = Number(process.env.AGENT_DEADLINE_MS ?? 40_000);
+  const deadline = t0 + DEADLINE_MS;
+  let deadlineHit = false;
 
   for (let i = 0; i < maxSteps; i++) {
+    if (Date.now() > deadline) { deadlineHit = true; break; }
+
     iterations++;
+    const remainingMs = Math.max(5_000, Math.min(60_000, deadline - Date.now()));
     const r = await input.llm.chat({
       messages,
       tools: defs,
@@ -124,5 +132,13 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }
   }
 
-  return { content, toolCalls: used, iterations, ms: Date.now() - t0 };
+  if (deadlineHit) {
+    const did = used.length ? `Встиг: ${[...new Set(used.map((u) => u.name))].join(", ")}.` : "";
+    content = `${content.trim()}\n\n—\n⏱ Зупинив роботу на ${Math.round(DEADLINE_MS / 1000)} с, щоб не вішати систему. ${did} Скажіть «продовж» — і я піду далі з цього місця.`.trim();
+  } else if (!content.trim()) {
+    content = used.length
+      ? "Не встиг довести до кінця. Ось що вже перевірив — скажіть «продовж», і я піду далі."
+      : "Не встиг відповісти за відведений час. Спробуйте сформулювати вужче — відповім швидко.";
+  }
+  return { content, toolCalls: used, iterations, ms: Date.now() - t0, deadlineHit };
 }
