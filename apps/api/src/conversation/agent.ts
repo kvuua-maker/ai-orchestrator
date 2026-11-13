@@ -38,6 +38,17 @@ export interface AgentTurnResult {
   ms: number;
 }
 
+/** Прибирає HTML-сміття: модель має бачити текст, а не розмітку. */
+function plain(text: string): string {
+  return String(text)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Короткий, але інформативний результат інструмента для моделі. */
 function summarize(name: string, res: any): string {
   if (!res.ok) return `ПОМИЛКА ${res.error?.code}: ${String(res.error?.message ?? "").slice(0, 300)}`;
@@ -48,7 +59,10 @@ function summarize(name: string, res: any): string {
     return `${d.summary ?? ""}\nПосилання на оголошення (використовуй їх у таблиці):\n${items.join("\n")}`.slice(0, 4000);
   }
   if (d.prices?.length) return `ціни: ${d.prices.slice(0, 12).join(", ")}\n${String(d.text ?? "").slice(0, 1500)}`;
-  if (d.text) return String(d.text).slice(0, 3000);
+  if (d.text) {
+    const t = plain(String(d.text));
+    return t.length > 60 ? t.slice(0, 3000) : `сторінка без читабельного тексту (${String(d.status ?? "?")})`;
+  }
   if (d.hits) return (d.hits as any[]).slice(0, 5).map((h) => String(h.content).slice(0, 200)).join("\n");
   return JSON.stringify(d).slice(0, 2000);
 }
@@ -79,6 +93,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   ];
 
   const used: Array<{ name: string; ok: boolean }> = [];
+  const findings: string[] = [];
   let content = "";
   let iterations = 0;
   const maxSteps = input.maxSteps ?? 5;
@@ -97,6 +112,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       tools: defs,
       maxTokens: 1400,
       temperature: 0.4,
+      timeoutMs: Math.min(25_000, Math.max(6_000, deadline - Date.now())),
       onDelta: (t) => { if (t) input.onDelta(t); },
     });
     content = r.content;
@@ -124,6 +140,10 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       }
       input.onStep(`${realName} → ${res.ok ? "ок" : res.error?.code ?? "помилка"}`, res.ok ? "done" : "failed");
       used.push({ name: realName, ok: Boolean(res.ok) });
+      if (res.ok) {
+        const line = plain(summarize(realName, res)).slice(0, 220);
+        if (line && !/^<!DOCTYPE|^<html|<script/i.test(line)) findings.push(line);
+      }
       return { call, res, realName };
     }));
 
@@ -134,7 +154,8 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
 
   if (deadlineHit) {
     const did = used.length ? `Встиг: ${[...new Set(used.map((u) => u.name))].join(", ")}.` : "";
-    content = `${content.trim()}\n\n—\n⏱ Зупинив роботу на ${Math.round(DEADLINE_MS / 1000)} с, щоб не вішати систему. ${did} Скажіть «продовж» — і я піду далі з цього місця.`.trim();
+    const got = findings.length ? `\n\nЩо вже є з джерел:\n${findings.slice(-2).map((f) => `• ${f}`).join("\n")}` : "";
+    content = `${content.trim()}${got}\n\n—\n⏱ Зупинив роботу на ${Math.round(DEADLINE_MS / 1000)} с, щоб не вішати систему. ${did} Скажіть «продовж» — і я піду далі з цього місця.`.trim();
   } else if (!content.trim()) {
     content = used.length
       ? "Не встиг довести до кінця. Ось що вже перевірив — скажіть «продовж», і я піду далі."

@@ -109,6 +109,7 @@ export const marketPrices = defineTool({
     const all: Array<{ title: string; price: number; currency: string; source: string; url: string }> = [];
     const report: Array<{ id: string; ok: boolean; found: number }> = [];
 
+    const watchdog = setTimeout(() => { ctx.close().catch(() => {}); }, 28_000);
     try {
       const pages = await Promise.all(SOURCES.map(async (src) => {
         const page = await ctx.newPage();
@@ -135,6 +136,7 @@ export const marketPrices = defineTool({
         all.push(...items);
       }
     } finally {
+      clearTimeout(watchdog);
       await ctx.close().catch(() => {});   // браузер спільний — не закриваємо
     }
 

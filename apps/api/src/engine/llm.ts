@@ -17,6 +17,7 @@ export interface LlmClient {
     tools?: any[];
     maxTokens?: number;
     temperature?: number;
+    timeoutMs?: number;
     onDelta?: (text: string) => void;
   }): Promise<ChatResult>;
   json<T>(input: { system: string; user: string; maxTokens?: number }): Promise<T | null>;
@@ -41,7 +42,7 @@ export function createLlm(opts: { apiKey?: string; baseUrl?: string; model?: str
     name: "deepseek",
 
     /** Стрімінг + tool calls в одному запиті (OpenAI-сумісний протокол DeepSeek). */
-    async chat({ messages, tools, maxTokens = 1200, temperature = 0.4, onDelta }: any): Promise<ChatResult> {
+    async chat({ messages, tools, maxTokens = 1200, temperature = 0.4, onDelta, timeoutMs = 25_000 }: any): Promise<ChatResult> {
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
@@ -50,7 +51,7 @@ export function createLlm(opts: { apiKey?: string; baseUrl?: string; model?: str
           ...(tools?.length ? { tools, tool_choice: "auto" } : {}),
           messages,
         }),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok || !res.body) {
         const body = await res.text().catch(() => "");

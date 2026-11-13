@@ -66,6 +66,7 @@ export const browserOpen = defineTool({
       extraHTTPHeaders: { "accept-language": "uk-UA,uk;q=0.9,en;q=0.8" },
     });
     const page = await ctx.newPage();
+    const watchdog = setTimeout(() => { ctx.close().catch(() => {}); }, 18_000);
     try {
       let status = 0;
       const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 });
@@ -107,6 +108,7 @@ export const browserOpen = defineTool({
         },
       };
     } finally {
+      clearTimeout(watchdog);
       await ctx.close().catch(() => {});
     }
   },
