@@ -42,8 +42,9 @@ function summarize(name: string, res: any): string {
   if (!res.ok) return `ПОМИЛКА ${res.error?.code}: ${String(res.error?.message ?? "").slice(0, 300)}`;
   const d = res.data ?? {};
   if (name === "market.prices") {
-    const items = (d.items ?? []).slice(0, 8).map((i: any) => `${i.price} грн — ${String(i.title).slice(0, 60)} (${i.source})`);
-    return `${d.summary ?? ""}\n${items.join("\n")}`.slice(0, 3000);
+    const items = (d.items ?? []).slice(0, 10)
+      .map((i: any) => `- ${i.price} грн | ${String(i.title).slice(0, 70)} | ${i.source} | ${i.url}`);
+    return `${d.summary ?? ""}\nПосилання на оголошення (використовуй їх у таблиці):\n${items.join("\n")}`.slice(0, 4000);
   }
   if (d.prices?.length) return `ціни: ${d.prices.slice(0, 12).join(", ")}\n${String(d.text ?? "").slice(0, 1500)}`;
   if (d.text) return String(d.text).slice(0, 3000);

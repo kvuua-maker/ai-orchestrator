@@ -42,7 +42,8 @@ export async function runTurn(
 
   // 1) пошук товару → спершу показуємо, ЯК зрозуміли, і чекаємо «так»
   const product = isProductSearch(text) ? interpretPhoneQuery(text) : null;
-  if (product) {
+  // картка потрібна лише якщо бракує обсягу пам'яті або комбінація неіснуюча
+  if (product && (product.issue || !product.canonical)) {
     const body = product.issue
       ? `Я зрозумів: **${product.understood}**.\n\n${product.issue}\n\nПідкажіть правильний варіант — і я одразу почну пошук.`
       : `Я зрозумів: ви шукаєте **${product.understood}**.\n\nВсе вірно? Якщо так — натисніть «Почати пошук», і я перевірю ціни. Якщо ні — скажіть, що виправити.`;

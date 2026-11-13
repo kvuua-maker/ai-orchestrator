@@ -5,7 +5,7 @@ type Browser = { newContext: (o: any) => Promise<any>; close: () => Promise<void
 let shared: Promise<Browser> | null = null;
 
 /** Один екземпляр Chromium на процес: запуск щоразу коштує ~1 с. */
-async function getBrowser(): Promise<Browser> {
+export async function getBrowser(): Promise<Browser> {
   if (!shared) {
     shared = (async () => {
       const { chromium } = await import("playwright");

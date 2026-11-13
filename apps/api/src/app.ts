@@ -520,16 +520,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
     const conv = await db.tx(req.tenantId, (q) => getConversation(q, req.params.id));
     if (!conv) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "conversation not found" } });
 
-    const run = await db.tx(req.tenantId, async (q) => {
-      const r = await insertRun(q, { tenantId: req.tenantId, userId: DEFAULT_USER, prompt: body.data.text,
-        budget: { maxUsd: 0.5, maxDurationSeconds: 900, maxSteps: 40 }, dryRun: false });
-      await q("UPDATE runs SET conversation_id=$2 WHERE id=$1", [r.id, conv.id]);
-      await appendEvent(q, r.id, "run.created", { prompt: body.data.text, fromConfirm: true });
-      await recordUsage(q, { tenantId: req.tenantId, runId: r.id, kind: "run", quantity: 1 });
-      return r;
+    // та сама логіка, що й для звичайного повідомлення: function calling, без DAG
+    const result = await runTurn(db, llm, embedder, { ...engine, tools: registry, artifacts }, {
+      tenantId: req.tenantId, userId: DEFAULT_USER, conversationId: conv.id, text: body.data.text,
     });
-    engine.enqueue(run.id, req.tenantId);
-    return reply.code(202).send({ runId: run.id });
+    return reply.send(result);
   });
 
   // SSE: нові повідомлення розмови + події активного запуску

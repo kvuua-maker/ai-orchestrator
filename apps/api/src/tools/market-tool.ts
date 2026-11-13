@@ -98,9 +98,8 @@ export const marketPrices = defineTool({
   scopes: ["browser:read"], agents: ["browser", "data", "synthesizer", "verifier"],
   timeoutMs: 120_000, maxRetries: 0,
   async execute({ query, minPrice, maxResults }) {
-    const { chromium } = await import("playwright");
-    process.env.PLAYWRIGHT_BROWSERS_PATH ||= "/mnt/HC_Volume_106461592/aio/pw-browsers";
-    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const { getBrowser } = await import("./browser-tool.js");
+    const browser: any = await getBrowser();
     const ctx = await browser.newContext({
       locale: "uk-UA", timezoneId: "Europe/Kyiv", viewport: { width: 1366, height: 900 },
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -111,29 +110,32 @@ export const marketPrices = defineTool({
     const report: Array<{ id: string; ok: boolean; found: number }> = [];
 
     try {
-      for (const src of SOURCES) {
+      const pages = await Promise.all(SOURCES.map(async (src) => {
         const page = await ctx.newPage();
         try {
-          const resp = await page.goto(src.url(query), { waitUntil: "domcontentloaded", timeout: 30_000 });
-          await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
-          await page.waitForTimeout(900);
-          if ((resp?.status() ?? 0) >= 400) { report.push({ id: src.id, ok: false, found: 0 }); continue; }
-          const rows: Array<{ title: string; price: string; url: string }> = await extract(page, src.id);
-          const items = rows
-            .map((r: { title: string; price: string; url: string }) => ({ ...r, n: toNumber(r.price) }))
-            .filter((r: { n: number; title: string }) => r.n >= (minPrice ?? 1500) && r.n <= 2_000_000 && relevant(r.title, query))
-            .map((r: { title: string; n: number; url: string }) => ({ title: clean(r.title), price: r.n, currency: "UAH", source: src.name, url: r.url }));
-          report.push({ id: src.id, ok: true, found: items.length });
-          all.push(...items);
+          const resp = await page.goto(src.url(query), { waitUntil: "domcontentloaded", timeout: 25_000 });
+          await page.waitForLoadState("networkidle", { timeout: 2500 }).catch(() => {});
+          await page.waitForTimeout(700);
+          if ((resp?.status() ?? 0) >= 400) return { src, rows: [] as any[], ok: false };
+          const rows = await extract(page, src.id);
+          return { src, rows, ok: true };
         } catch {
-          report.push({ id: src.id, ok: false, found: 0 });
+          return { src, rows: [] as any[], ok: false };
         } finally {
           await page.close().catch(() => {});
         }
+      }));
+
+      for (const { src, rows, ok } of pages) {
+        const items = (rows as Array<{ title: string; price: string; url: string }>)
+          .map((r) => ({ ...r, n: toNumber(r.price) }))
+          .filter((r: { n: number; title: string }) => r.n >= (minPrice ?? 1500) && r.n <= 2_000_000 && relevant(r.title, query))
+          .map((r: { title: string; n: number; url: string }) => ({ title: clean(r.title), price: r.n, currency: "UAH", source: src.name, url: r.url }));
+        report.push({ id: src.id, ok, found: items.length });
+        all.push(...items);
       }
     } finally {
-      await ctx.close().catch(() => {});
-      await browser.close().catch(() => {});
+      await ctx.close().catch(() => {});   // браузер спільний — не закриваємо
     }
 
     // дедуплікація за назвою+ціною, сортування за ціною
