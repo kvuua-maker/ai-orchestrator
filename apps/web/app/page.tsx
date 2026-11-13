@@ -58,6 +58,10 @@ export default function ChatPage() {
   const [speakOut, setSpeakOut] = useState(true);
   const [proactive, setProactive] = useState<Array<{ label: string; text: string }>>([]);
   const recRef = useRef<any>(null);
+  const micLevelRef = useRef(0);
+  const [micLevel, setMicLevel] = useState(0);
+  const [micSeconds, setMicSeconds] = useState(0);
+  const [preview, setPreview] = useState("");
   const sseAlive = useRef(false);
   const pollTimer = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -241,9 +245,59 @@ export default function ChatPage() {
       const rec = new MediaRecorder(stream, { mimeType: mime });
       const chunks: BlobPart[] = [];
       rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+      // ── живий рівень + таймер (одразу видно, що мікрофон чує) ──
+      const actx = new AudioContext();
+      await actx.resume().catch(() => {});
+      const analyser = actx.createAnalyser();
+      analyser.fftSize = 512;
+      actx.createMediaStreamSource(stream).connect(analyser);
+      const frame = new Uint8Array(analyser.fftSize);
+      const startedAt = Date.now();
+      let lastVoice = Date.now();
+      let spokeAt = 0;
+      const tick = setInterval(() => {
+        analyser.getByteTimeDomainData(frame);
+        let sum = 0;
+        for (let i = 0; i < frame.length; i++) { const v = (frame[i]! - 128) / 128; sum += v * v; }
+        const rms = Math.sqrt(sum / frame.length);
+        micLevelRef.current = rms;
+        setMicLevel(Math.min(1, rms * 6));
+        setMicSeconds(Math.floor((Date.now() - startedAt) / 1000));
+        if (rms > 0.008) { lastVoice = Date.now(); if (!spokeAt) spokeAt = Date.now(); }
+        else if (spokeAt && Date.now() - lastVoice > 2500) { rec.stop(); }   // авто-стоп після 2.5 с тиші
+      }, 80);
+
+      // ── живий частковий текст: браузерне розпізнавання як ПРЕВ'Ю (фінал — Whisper) ──
+      let recog: any = null;
+      try {
+        const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (SR) {
+          recog = new SR();
+          recog.lang = "uk-UA"; recog.interimResults = true; recog.continuous = true;
+          let acc = "";
+          recog.onresult = (e: any) => {
+            let interim = "";
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+              const r = e.results[i];
+              if (r.isFinal) acc += r[0].transcript + " ";
+              else interim += r[0].transcript;
+            }
+            setPreview((acc + interim).trim().slice(0, 300));
+          };
+          recog.onerror = () => {};
+          recog.start();
+        }
+      } catch { /* прев'ю недоступне — покажемо рівень і таймер */ }
+
       rec.onstop = async () => {
+        clearInterval(tick); actx.close().catch(() => {});
+        try { recog?.stop(); } catch {}
         stream.getTracks().forEach((t) => t.stop());
-        setListening(false); setThinking(true);
+        setListening(false); setMicLevel(0); setMicSeconds(0);
+
+        const previewText = preview.trim();
+        setThinking(true);
         try {
           const blob = new Blob(chunks, { type: mime.split(";")[0] });
           const res = await fetch(`${API}/v1/voice/transcribe`, {
@@ -253,36 +307,17 @@ export default function ChatPage() {
           });
           if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error?.message ?? `HTTP ${res.status}`);
           const data = await res.json();
-          if (data.text) setText((prev) => fixTranscript((prev ? prev + " " : "") + data.text));
-          else setError("Не вдалося розпізнати мовлення — спробуйте ще раз ближче до мікрофона.");
+          const finalText = (data.text || "").trim() || previewText;
+          if (finalText) setText((prev) => fixTranscript((prev ? prev + " " : "") + finalText));
+          else setError("Не вдалося розпізнати мовлення. Говоріть ближче до мікрофона і трохи повільніше.");
         } catch (e: any) {
-          setError("Розпізнавання не вдалося: " + e.message);
-        } finally { setThinking(false); }
+          if (previewText) setText((prev) => fixTranscript((prev ? prev + " " : "") + previewText));
+          else setError("Розпізнавання не вдалося: " + e.message);
+        } finally { setPreview(""); setThinking(false); }
       };
-      // ── VAD: чекаємо, поки людина закінчить говорити (1.5 с тиші) ──
-      const actx = new AudioContext();
-      await actx.resume().catch(() => {});
-      const analyser = actx.createAnalyser();
-      analyser.fftSize = 1024;
-      actx.createMediaStreamSource(stream).connect(analyser);
-      const frame = new Uint8Array(analyser.fftSize);
-      let lastVoice = Date.now();
-      let spokeAt = 0;
-      const vad = setInterval(() => {
-        analyser.getByteTimeDomainData(frame);
-        let sum = 0;
-        for (let i = 0; i < frame.length; i++) { const v = (frame[i]! - 128) / 128; sum += v * v; }
-        const rms = Math.sqrt(sum / frame.length);
-        (window as any).__rms = rms;
-        if (rms > 0.008) { lastVoice = Date.now(); if (!spokeAt) spokeAt = Date.now(); }
-        else if (spokeAt && Date.now() - lastVoice > 1500) { rec.stop(); }
-      }, 100);
-      const cleanupVad = () => { clearInterval(vad); actx.close().catch(() => {}); };
-      const stopHandler = rec.onstop;
-      rec.onstop = (ev: Event) => { cleanupVad(); if (stopHandler) (stopHandler as any).call(rec, ev); };
 
-      recRef.current = rec; rec.start(); setListening(true); setError(null);
-      setTimeout(() => { if (rec.state === "recording") rec.stop(); }, 30_000);
+      recRef.current = rec; rec.start(); setListening(true); setError(null); setPreview("");
+      setTimeout(() => { if (rec.state === "recording") rec.stop(); }, 60_000);
     } catch (e: any) {
       setListening(false);
       const insecure = typeof window !== "undefined" && !window.isSecureContext;
@@ -291,7 +326,6 @@ export default function ChatPage() {
         : "Немає доступу до мікрофона: " + (e?.message ?? "невідома помилка"));
     }
   }
-
 
   async function stopRun() {
     if (!busyRun || stopping) return;
@@ -461,6 +495,32 @@ export default function ChatPage() {
             )}
             <div ref={endRef} />
           </div>
+
+          {listening && (
+            <div style={{ margin: "0 0 8px", padding: "10px 12px", borderRadius: 10, background: "#121a2b", border: "1px solid #2a3a58" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 99, background: "#ff5a5a", boxShadow: "0 0 8px #ff5a5a", flexShrink: 0 }} />
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 24, flex: 1, minWidth: 0 }}>
+                  {Array.from({ length: 28 }).map((_, i) => {
+                    const phase = Math.sin((Date.now() / 140) + i * 0.6);
+                    const h = Math.max(3, Math.min(24, (micLevel * 26) + Math.abs(phase) * micLevel * 14 + 3));
+                    return <span key={i} style={{ flex: 1, height: h, borderRadius: 2,
+                      background: micLevel > 0.05 ? "#4f7cff" : "#2a3a58", transition: "height 80ms linear" }} />;
+                  })}
+                </div>
+                <span style={{ fontSize: 12.5, color: "#9fb3d9", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                  {String(Math.floor(micSeconds / 60)).padStart(2, "0")}:{String(micSeconds % 60).padStart(2, "0")}
+                </span>
+                <button onClick={() => recRef.current?.stop()} aria-label="Зупинити запис"
+                  style={{ flexShrink: 0, padding: "6px 12px", borderRadius: 8, border: 0, background: "#ff5a5a", color: "#fff", fontSize: 12.5, cursor: "pointer" }}>
+                  ■ Стоп
+                </button>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 13, color: micLevel > 0.05 ? "#dfe6f5" : "#6b7896", minHeight: 18, lineHeight: 1.4 }}>
+                {preview || (micLevel > 0.05 ? "слухаю…" : "говоріть — я записую")}
+              </div>
+            </div>
+          )}
 
           {handoff && (
             <div style={{ margin: "6px 0", padding: "12px 14px", borderRadius: 10, background: "#241b0a", border: "1px solid #5a4318" }}>
