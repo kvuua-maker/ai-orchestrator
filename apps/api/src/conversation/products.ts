@@ -91,3 +91,14 @@ export function isProductSearch(text: string): boolean {
   return /(iphone|samsung|xiaomi|pixel|macbook|ноутбук|телефон|смартфон|навушник|пилосос)/.test(t)
     && /(цін|коштує|купити|знайди|порівняй|скільки|наявн|модел|гб|gb)/.test(t);
 }
+
+/** Пошуковий запит для маркетплейсів: латиниця, без дужок і зайвих слів. */
+export function searchQuery(text: string): string {
+  const { key, storage } = parsePhone(text);
+  if (key) {
+    const gen: Record<string, string> = { se1: "", se2: "2020", se3: "2022" };
+    const model = key.startsWith("se") ? `iPhone SE ${gen[key] ?? ""}` : `iPhone ${key.toUpperCase()}`;
+    return `${model}${storage ? ` ${storage}GB` : ""}`.replace(/\s+/g, " ").trim();
+  }
+  return text.replace(/\([^)]*\)/g, " ").replace(/[^\w\s.]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+}

@@ -4,6 +4,7 @@ import { ToolRegistry } from "./registry.js";
 import { httpFetch } from "./http-fetch.js";
 import { documentsParseReceipt, documentsProcess, documentsExport, documentsFolders } from "./documents-tool.js";
 import { browserOpen } from "./browser-tool.js";
+import { marketPrices } from "./market-tool.js";
 import { createMemoryTools } from "./memory-tool.js";
 
 export interface RegistryDeps { db?: Db; embedder?: Embedder }
@@ -12,6 +13,7 @@ export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
   const reg = new ToolRegistry()
     .register(httpFetch)
     .register(browserOpen)
+    .register(marketPrices)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)

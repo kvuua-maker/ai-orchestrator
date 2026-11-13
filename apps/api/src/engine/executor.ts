@@ -1,3 +1,4 @@
+import { interpretPhoneQuery, searchQuery } from "../conversation/products.js";
 import type { GoalSpec, Plan, TaskNode, TaskResult } from "@aio/shared";
 import type { Db, QueryFn } from "../db/index.js";
 import { appendEvent, getRun, insertTasks, setStatus, updateTask } from "../repo/runs.js";
@@ -189,6 +190,34 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           publishStep(`Не вдалося: ${verdict.reason}`, "failed", "✕");
           out.blockers.push(verdict.message);
 
+          // Smart Fallback: блокування прямого сайту → сам шукаю ціни на маркетплейсах
+          if (/antibot|blocked/i.test(verdict.reason ?? "") && tools.has("market.prices")) {
+            // запит має бути назвою товару, а не текстом задачі
+            const q = searchQuery(run.prompt) || searchQuery(node.goal) || run.prompt.slice(0, 60);
+            publishStep("Сайт блокує — шукаю ціни на маркетплейсах", "running", "🔎");
+            const fb = await tools.invoke("market.prices", { query: q }, {
+              tenantId, runId, taskId: node.id, dryRun: run.dry_run,
+              budgetUsd: guard.snapshot().remainingUsd, artifacts,
+            }, "browser");
+            await step((qq) => appendEvent(qq, runId, "tool.called", { taskId: node.id, tool: "market.prices", args: ["query"], fallback: true }));
+            let fbFinal = fb;
+            // якщо нічого — пробуємо коротший запит (лише модель)
+            if (fb.ok && !(fb.data as any)?.items?.length) {
+              const short = q.split(/\s+/).slice(0, 3).join(" ");
+              if (short && short !== q) fbFinal = await tools.invoke("market.prices", { query: short }, {
+                tenantId, runId, taskId: node.id, dryRun: run.dry_run,
+                budgetUsd: guard.snapshot().remainingUsd, artifacts,
+              }, "browser");
+            }
+            if (fbFinal.ok) {
+              const d2 = fbFinal.data as any;
+              if (d2?.items?.length) findings.push(`Ціни (${d2.summary}): ` + d2.items.slice(0, 8).map((i: any) => `${i.price} грн — ${i.title.slice(0, 50)} (${i.source})`).join("; "));
+              publishStep(`Знайшов ${d2?.items?.length ?? 0} пропозицій в обхід блоку`, "done", "✓");
+              out.status = "success";
+              out.summary = d2?.summary ?? "знайдено ціни";
+              break;
+            }
+          }
           const humanAlready = Boolean((run.result as any)?.humanConfirmed);
           if (verdict.kind === "needs_human" && humanAlready) {
             // людина вже підтвердила — не питаємо вдруге, крок пропускаємо честно
