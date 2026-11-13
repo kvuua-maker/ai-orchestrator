@@ -10,7 +10,7 @@ import type { ToolRegistry } from "../tools/index.js";
  */
 
 const CHAT_TOOLS = new Set([
-  "http.fetch", "browser.open", "market.prices", "company.lookup", "search.web", "telegram.lookup",
+  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "search.web", "telegram.lookup",
   "memory.search", "memory.remember",
   "documents.process", "documents.parseReceipt", "documents.export",
 ]);
@@ -63,6 +63,17 @@ function summarize(name: string, res: any): string {
   if (name === "search.web") {
     const rows = (d.results ?? []).slice(0, 10).map((r: any) => `- ${r.title} | ${r.url} | ${r.snippet}`);
     return `Пошук «${d.query}» (${d.engine}, ${d.total}):\n${rows.join("\n")}`.slice(0, 4000);
+  }
+  if (name === "edr.lookup") {
+    const items = (d.items ?? []) as any[];
+    if (!items.length) return `У локальному ЄДР нічого не знайдено за «${d.query}».`;
+    return items.slice(0, 3).map((i) => [
+      `${i.name}`, `ЄДРПОУ: ${i.edrpou}`,
+      i.status ? `Статус: ${i.status}` : null,
+      i.director ? `Керівник: ${i.director}` : null,
+      i.registered_at ? `Зареєстровано: ${i.registered_at}` : null,
+      "Джерело: ЄДР (офіційний, локальна копія)",
+    ].filter(Boolean).join("\n")).join("\n\n");
   }
   if (name === "company.lookup") {
     const c = d.company;

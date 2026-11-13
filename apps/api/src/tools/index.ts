@@ -8,6 +8,7 @@ import { marketPrices } from "./market-tool.js";
 import { companyLookup } from "./company-tool.js";
 import { searchWeb } from "./search-tool.js";
 import { telegramLookup } from "./telegram-tool.js";
+import { edrLookup } from "./edr-tool.js";
 import { createMemoryTools } from "./memory-tool.js";
 
 export interface RegistryDeps { db?: Db; embedder?: Embedder }
@@ -20,6 +21,7 @@ export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
     .register(companyLookup)
     .register(searchWeb)
     .register(telegramLookup)
+    .register(edrLookup)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)

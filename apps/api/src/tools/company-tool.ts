@@ -104,6 +104,21 @@ export const companyLookup = defineTool({
   timeoutMs: 32_000, maxRetries: 0,
   async execute({ query }) {
     const tried: string[] = [];
+    // 1) локальний офіційний ЄДР — мілісекунди
+    try {
+      const { edrFind } = await import("./edr-tool.js");
+      const rows = await edrFind(query, 3);
+      tried.push("ЄДР (локальний)");
+      if (rows.length) {
+        const r = rows[0]!;
+        return { data: { found: true, tried, company: {
+          name: r.name, edrpou: r.edrpou, address: null, director: r.director,
+          activity: r.opf, status: r.status, registeredAt: r.registered_at,
+          source: "ЄДР (офіційний реєстр, локальна копія)", url: `https://opendatabot.ua/c/${r.edrpou}`,
+        } } };
+      }
+    } catch { /* ignore */ }
+
     for (const [name, fn] of [["Opendatabot API", viaOpendatabot], ["UA-REGION", viaUaRegion]] as const) {
       const res = await (fn as any)(query).catch(() => null);
       tried.push(name);
