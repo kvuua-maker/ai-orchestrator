@@ -103,14 +103,19 @@ export async function runTurn(
     } else if (/(судов|суді|справ[аиу]?\s|рішенн|ухвал|вирок|позов)/i.test(text) && !isCompany) {
       // запит про судові справи — реєстр рішень, а не загальний пошук
       const q = (nameMatch?.[0] ?? text).replace(/знайди|судові|справи|за|про/gi, " ").replace(/\s{2,}/g, " ").trim().slice(0, 120);
-      const r = await (engine.tools as any).invoke("court.search", { query: q || text.slice(0, 120), limit: 8 }, {
+      const partyMode = /(як сторона|стороною|сторон[аи]|позивач|відповідач|обвинувач|потерпіл)/i.test(text);
+      const r = await (engine.tools as any).invoke("court.search", { query: q || text.slice(0, 120), limit: 8, role: partyMode ? "party" : "any" }, {
         tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
       }, "synthesizer");
       const hits = (r.ok ? r.data?.hits ?? [] : []) as any[];
       if (hits.length) {
-        const body = `**Судові справи за «${q || text.slice(0, 60)}» — ${r.data.total} документів у реєстрі**\n\n`
+        const excl = (r.data as any)?.excludedAsJudge ?? 0;
+        const body = `**Судові справи за «${q || text.slice(0, 60)}» — ${r.data.total} документів у реєстрі**`
+          + (partyMode ? `\n_Режим «сторона»: відсіяно ${excl} справ, де ця людина — суддя._\n` : "\n")
+          + `\n`
           + hits.slice(0, 8).map((h) => `- **${h.caseNumber || h.id}** · ${h.type || "документ"} · ${h.date}\n  ${h.court}\n  [відкрити рішення](${h.url})`).join("\n")
-          + `\n\n_Джерело: Єдиний державний реєстр судових рішень._`;
+          + `\n\n_Джерело: Єдиний державний реєстр судових рішень._`
+          + (partyMode ? `\n_Увага: реєстр не показує сторони у списку результатів, тому частина справ може містити згадку ПІБ у тексті, а не участь стороною. Для точної перевірки відкрийте рішення._` : "");
         const m = await db.tx(tenantId, (q2) => addMessage(q2, {
           tenantId, conversationId, role: "assistant", content: body, runId: null,
           meta: { intent: "answer", court: true },

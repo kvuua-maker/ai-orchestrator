@@ -21,10 +21,13 @@ export const courtSearch = defineTool({
   input: z.object({
     query: z.string().min(2),
     limit: z.number().int().min(1).max(20).optional(),
+    /** party — відкинути справи, де ПІБ є суддею (шукаємо лише участь стороною) */
+    role: z.enum(["any", "party"]).optional(),
   }),
   output: z.object({
     query: z.string(),
     total: z.string(),
+    excludedAsJudge: z.number().optional(),
     hits: z.array(z.object({
       id: z.string(), url: z.string(), type: z.string(), date: z.string(),
       caseNumber: z.string(), court: z.string(), judge: z.string(),
@@ -33,7 +36,7 @@ export const courtSearch = defineTool({
   risk: "read", effectClass: "pure", costClass: "free",
   scopes: ["browser:read"], agents: ["synthesizer", "data", "verifier", "browser"],
   timeoutMs: 30_000, maxRetries: 0,
-  async execute({ query, limit }) {
+  async execute({ query, limit, role }) {
     const { getBrowser } = await import("./browser-tool.js");
     const browser: any = await getBrowser();
     const ctx = await browser.newContext({
@@ -72,7 +75,21 @@ export const courtSearch = defineTool({
         return out;
       });
 
-      return { data: { query, total, hits: rows.slice(0, limit ?? 10) } };
+      // режим «сторона»: відсіюємо справи, де ця людина — суддя
+      let filtered = rows;
+      let excluded = 0;
+      if (role === "party") {
+        const parts = query.trim().split(/\s+/);
+        const surname = (parts[0] ?? "").toLowerCase();
+        const initial = (parts[1] ?? "").charAt(0).toLowerCase();
+        filtered = rows.filter((r) => {
+          const j = (r.judge ?? "").toLowerCase();
+          const isJudge = j.includes(surname) && (!initial || j.includes(initial));
+          if (isJudge) excluded++;
+          return !isJudge;
+        });
+      }
+      return { data: { query, total, excludedAsJudge: excluded, hits: filtered.slice(0, limit ?? 10) } };
     } finally {
       clearTimeout(watchdog);
       await ctx.close().catch(() => {});
