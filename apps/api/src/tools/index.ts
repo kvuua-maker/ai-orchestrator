@@ -11,6 +11,7 @@ import { telegramLookup } from "./telegram-tool.js";
 import { edrLookup } from "./edr-tool.js";
 import { vatCheck, fopLookup } from "./registry-tools.js";
 import { courtSearch } from "./court-tool.js";
+import { docCheck } from "./doccheck-tool.js";
 import { createMemoryTools } from "./memory-tool.js";
 
 export interface RegistryDeps { db?: Db; embedder?: Embedder }
@@ -27,6 +28,7 @@ export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
     .register(vatCheck)
     .register(fopLookup)
     .register(courtSearch)
+    .register(docCheck)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)
