@@ -87,6 +87,38 @@ export async function runTurn(
     }
   } catch { facts = []; }
 
+  // 3.5) префетч для типових запитів: людина за ПІБ / компанія — одразу потрібне джерело
+  let prefetched = "";
+  const isCompany = /(тов|тзов|фоп|пат|єдрпоу|компані)/i.test(text);
+  const nameMatch = text.match(/\b([А-ЯІЇЄҐ][а-яіїєґ’'-]{2,})\s+([А-ЯІЇЄҐ][а-яіїєґ’'-]{2,})(?:\s+([А-ЯІЇЄҐ][а-яіїєґ’'-]{2,}))?/);
+  try {
+    if (isCompany) {
+      const r = await (engine.tools as any).invoke("company.lookup", { query: text.slice(0, 120) }, {
+        tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
+      }, "synthesizer");
+      if (r.ok && r.data?.found) {
+        const c = r.data.company;
+        prefetched = `Готові дані про компанію (використай їх у відповіді):\nНазва: ${c.name}\nЄДРПОУ: ${c.edrpou ?? "—"}\nАдреса: ${c.address ?? "—"}\nКерівник: ${c.director ?? "—"}\nДіяльність: ${c.activity ?? "—"}\nДжерело: ${c.source} ${c.url}`;
+      }
+    } else if (nameMatch) {
+      const r = await (engine.tools as any).invoke("search.web", { query: text.slice(0, 120), limit: 8 }, {
+        tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
+      }, "synthesizer");
+      if (r.ok && r.data?.results?.length) {
+        // для ПІБ відповідаємо детерміновано: швидко, з посиланнями, без блукання моделі
+        const rows = r.data.results.slice(0, 8) as Array<{ title: string; url: string; snippet: string }>;
+        const body = `**${nameMatch[0]} — що є у відкритих джерелах:**\n\n`
+          + rows.map((x) => `- [${x.title.slice(0, 90)}](${x.url})${x.snippet ? `\n  ${x.snippet.slice(0, 160)}` : ""}`).join("\n")
+          + `\n\n_Джерела: ${rows.length} результатів веб-пошуку. Якщо це не та людина — уточніть місто, компанію або рік народження._`;
+        const m = await db.tx(tenantId, (q) => addMessage(q, {
+          tenantId, conversationId, role: "assistant", content: body, runId: null,
+          meta: { intent: "answer", sources: rows.map((x) => x.url) },
+        }));
+        return { intent: "answer", runId: null, messageId: m.id, content: body };
+      }
+    }
+  } catch { prefetched = ""; }
+
   // 4) основний шлях: function calling — модель сама вирішує, відповісти чи діяти
   const messageId = `msg_a_${Date.now().toString(36)}`;
   bus.publish(conversationId, { type: "message.start", messageId, role: "assistant", meta: { intent: "answer" } });
@@ -97,7 +129,8 @@ export async function runTurn(
     llm, db: (fn: any) => db.tx(tenantId, fn), tools: engine.tools as any, tenantId, artifacts: engine.artifacts as any,
     history, facts: facts.map((f) => f.content),
     text,
-    system: `${PERSONA}\n\n${facts.length ? `Факти про клієнта:\n${facts.map((f) => `- ${f.content}`).join("\n")}` : ""}`,
+    noTools: Boolean(prefetched),
+    system: `${PERSONA}\n\n${prefetched ? prefetched + "\n\nВідповідай ЛИШЕ на основі цих даних і дай посилання. Не викликай інші інструменти.\n\n" : ""}${facts.length ? `Факти про клієнта:\n${facts.map((f) => `- ${f.content}`).join("\n")}` : ""}`,
     onDelta: (t) => { streamed += t; bus.publish(conversationId, { type: "message.delta", messageId, text: t }); },
     onStep: (label, status) => {
       const icon = status === "done" ? "✓" : status === "failed" ? "✕" : "⏳";

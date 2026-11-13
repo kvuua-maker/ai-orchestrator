@@ -10,7 +10,7 @@ import type { ToolRegistry } from "../tools/index.js";
  */
 
 const CHAT_TOOLS = new Set([
-  "http.fetch", "browser.open", "market.prices", "company.lookup",
+  "http.fetch", "browser.open", "market.prices", "company.lookup", "search.web",
   "memory.search", "memory.remember",
   "documents.process", "documents.parseReceipt", "documents.export",
 ]);
@@ -28,6 +28,7 @@ export interface AgentTurnInput {
   onDelta: (text: string) => void;
   onStep: (label: string, status: "running" | "done" | "failed") => void;
   maxSteps?: number;
+  noTools?: boolean;
 }
 
 export interface AgentTurnResult {
@@ -59,6 +60,10 @@ function summarize(name: string, res: any): string {
     return `ПОМИЛКА ${code}: ${String(res.error?.message ?? "").slice(0, 240)}${hint}`;
   }
   const d = res.data ?? {};
+  if (name === "search.web") {
+    const rows = (d.results ?? []).slice(0, 10).map((r: any) => `- ${r.title} | ${r.url} | ${r.snippet}`);
+    return `Пошук «${d.query}» (${d.engine}, ${d.total}):\n${rows.join("\n")}`.slice(0, 4000);
+  }
   if (name === "company.lookup") {
     const c = d.company;
     if (!d.found || !c) return `Не знайдено в джерелах: ${(d.tried ?? []).join(", ")}`;
@@ -92,7 +97,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const toApi = (n: string) => n.replace(/\./g, "_");
   const fromApi = new Map<string, string>();
 
-  const defs = input.tools.list()
+  const defs = input.noTools ? [] : input.tools.list()
     .filter((t) => CHAT_TOOLS.has(t.name))
     .map((t) => ({
       type: "function" as const,

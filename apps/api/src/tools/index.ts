@@ -6,6 +6,7 @@ import { documentsParseReceipt, documentsProcess, documentsExport, documentsFold
 import { browserOpen } from "./browser-tool.js";
 import { marketPrices } from "./market-tool.js";
 import { companyLookup } from "./company-tool.js";
+import { searchWeb } from "./search-tool.js";
 import { createMemoryTools } from "./memory-tool.js";
 
 export interface RegistryDeps { db?: Db; embedder?: Embedder }
@@ -16,6 +17,7 @@ export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
     .register(browserOpen)
     .register(marketPrices)
     .register(companyLookup)
+    .register(searchWeb)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)
