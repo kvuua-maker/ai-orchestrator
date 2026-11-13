@@ -90,9 +90,41 @@ export function preloadWhisper(): void {
   setTimeout(() => { try { worker.warm(); } catch { /* ignore */ } }, 500);
 }
 
+/** Groq: whisper-large-v3-turbo — найкраща точність для української, безкоштовний ліміт. */
+async function viaGroq(audio: Buffer, mime: string, lang: string): Promise<SttResult | null> {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) return null;
+  const t0 = Date.now();
+  try {
+    const ext = EXT[mime.split(";")[0]!.trim()] ?? "webm";
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(audio)], { type: mime }), `audio.${ext}`);
+    form.append("model", process.env.GROQ_STT_MODEL ?? "whisper-large-v3-turbo");
+    form.append("language", lang.slice(0, 2) === "uk" ? "uk" : lang);
+    form.append("response_format", "json");
+    form.append("temperature", "0");
+
+    const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST", headers: { authorization: `Bearer ${key}` }, body: form,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    const text = String(json?.text ?? "").trim();
+    if (!text) return null;
+    return { text, ms: Date.now() - t0, model: String(json?.model ?? "whisper-large-v3-turbo"), seconds: 0, engine: "groq" };
+  } catch { return null; }
+}
+
 export async function transcribe(audio: Buffer, mime: string, lang = "ukrainian"): Promise<SttResult> {
   if (audio.length < 2000) throw new Error("аудіо занадто коротке");
   const t0 = Date.now();
+
+  // 1) Groq (найвища точність) — якщо є ключ
+  const groq = await viaGroq(audio, mime, lang);
+  if (groq) return { ...groq, ms: Date.now() - t0 };
+
+  // 2) локальний whisper — фолбек без інтернету
   if (!warmed) { warmed = true; worker.warm(); }
   const pcm = await toPcm(audio, EXT[mime.split(";")[0]!.trim()] ?? "webm");
   const seconds = pcm.length / 16000;

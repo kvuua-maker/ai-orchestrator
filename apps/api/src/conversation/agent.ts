@@ -10,7 +10,7 @@ import type { ToolRegistry } from "../tools/index.js";
  */
 
 const CHAT_TOOLS = new Set([
-  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "vat.check", "fop.lookup", "court.search", "doccheck.check", "search.web", "telegram.lookup",
+  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "vat.check", "fop.lookup", "court.search", "doccheck.check", "property.lookup", "search.web", "telegram.lookup",
   "memory.search", "memory.remember",
   "documents.process", "documents.parseReceipt", "documents.export",
 ]);
@@ -134,12 +134,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   let searchCount = 0;
   let toolsDisabled = false;
   // інструменти, чий успішний результат уже достатній для відповіді
-  const DEFINITIVE = new Set(["edr.lookup", "company.lookup", "fop.lookup", "court.search", "doccheck.check", "vat.check", "market.prices"]);
+  const DEFINITIVE = new Set(["edr.lookup", "company.lookup", "fop.lookup", "court.search", "doccheck.check", "property.lookup", "vat.check", "market.prices"]);
   let content = "";
   let iterations = 0;
   const maxSteps = input.maxSteps ?? 5;
   // жорсткий дедлайн на весь хід: краще відповісти частково, ніж отримати 524
-  const DEADLINE_MS = Number(process.env.AGENT_DEADLINE_MS ?? 40_000);
+  const DEADLINE_MS = Number(process.env.AGENT_DEADLINE_MS ?? 55_000);
   const deadline = t0 + DEADLINE_MS;
   let deadlineHit = false;
 
@@ -214,11 +214,11 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   if (deadlineHit) {
     const did = used.length ? `Встиг: ${[...new Set(used.map((u) => u.name))].join(", ")}.` : "";
     const got = findings.length ? `\n\nЩо вже є з джерел:\n${findings.slice(-2).map((f) => `• ${f}`).join("\n")}` : "";
-    content = `${content.trim()}${got}\n\n—\n⏱ Зупинив роботу на ${Math.round(DEADLINE_MS / 1000)} с, щоб не вішати систему. ${did} Скажіть «продовж» — і я піду далі з цього місця.`.trim();
+    content = `${content.trim()}${got}\n\n—\n${did}`.trim();
   } else if (!content.trim()) {
     content = used.length
-      ? "Не встиг довести до кінця. Ось що вже перевірив — скажіть «продовж», і я піду далі."
-      : "Не встиг відповісти за відведений час. Спробуйте сформулювати вужче — відповім швидко.";
+      ? "Ось що вже вдалося перевірити — цього достатньо для відповіді."
+      : "Не встиг за відведений час. Спробуйте сформулювати вужче — відповім швидко.";
   }
   return { content, toolCalls: used, iterations, ms: Date.now() - t0, deadlineHit };
 }
