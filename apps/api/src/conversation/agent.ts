@@ -10,7 +10,7 @@ import type { ToolRegistry } from "../tools/index.js";
  */
 
 const CHAT_TOOLS = new Set([
-  "http.fetch", "browser.open", "market.prices",
+  "http.fetch", "browser.open", "market.prices", "company.lookup",
   "memory.search", "memory.remember",
   "documents.process", "documents.parseReceipt", "documents.export",
 ]);
@@ -51,8 +51,27 @@ function plain(text: string): string {
 
 /** Короткий, але інформативний результат інструмента для моделі. */
 function summarize(name: string, res: any): string {
-  if (!res.ok) return `ПОМИЛКА ${res.error?.code}: ${String(res.error?.message ?? "").slice(0, 300)}`;
+  if (!res.ok) {
+    const code = String(res.error?.code ?? "ERROR");
+    const hint = /BLOCKED|ANTIBOT|CAPTCHA|FORBIDDEN/i.test(code + String(res.error?.message ?? ""))
+      ? " → джерело закрите, спробуй ІНШИЙ інструмент або джерело (наприклад company.lookup, market.prices, http.fetch на інший сайт). Не питай користувача."
+      : "";
+    return `ПОМИЛКА ${code}: ${String(res.error?.message ?? "").slice(0, 240)}${hint}`;
+  }
   const d = res.data ?? {};
+  if (name === "company.lookup") {
+    const c = d.company;
+    if (!d.found || !c) return `Не знайдено в джерелах: ${(d.tried ?? []).join(", ")}`;
+    return [
+      `Назва: ${c.name}`,
+      c.edrpou ? `ЄДРПОУ: ${c.edrpou}` : null,
+      c.address ? `Адреса: ${c.address}` : null,
+      c.director ? `Керівник: ${c.director}` : null,
+      c.activity ? `Діяльність: ${c.activity}` : null,
+      c.registeredAt ? `Зареєстровано: ${c.registeredAt}` : null,
+      `Джерело: ${c.source} — ${c.url}`,
+    ].filter(Boolean).join("\n");
+  }
   if (name === "market.prices") {
     const items = (d.items ?? []).slice(0, 10)
       .map((i: any) => `- ${i.price} грн | ${String(i.title).slice(0, 70)} | ${i.source} | ${i.url}`);
@@ -141,7 +160,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       input.onStep(`${realName} → ${res.ok ? "ок" : res.error?.code ?? "помилка"}`, res.ok ? "done" : "failed");
       used.push({ name: realName, ok: Boolean(res.ok) });
       if (res.ok) {
-        const line = plain(summarize(realName, res)).slice(0, 220);
+        const line = plain(summarize(realName, res).split("\n")[0] ?? "").slice(0, 220);
         if (line && !/^<!DOCTYPE|^<html|<script/i.test(line)) findings.push(line);
       }
       return { call, res, realName };

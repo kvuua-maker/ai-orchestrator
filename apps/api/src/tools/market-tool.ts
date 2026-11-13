@@ -8,11 +8,14 @@ import { defineTool } from "./sdk.js";
 
 interface Source { id: string; name: string; url: (q: string) => string }
 
-const slug = (q: string) => encodeURIComponent(q.trim()).replace(/%20/g, "-");
+const SHOPS = /\b(rozetka|розетка|comfy|комфі|foxtrot|фокстрот|allo|алло|moyo|мойо|epicentr|епіцентр|citrus|цитрус|telemart|ct|hotline|prom|olx)\b/gi;
+/** «...на Rozetka» — це адреса, а не товар: прибираємо магазини із запиту. */
+const cleanQuery = (q: string) => q.replace(SHOPS, " ").replace(/\s{2,}/g, " ").trim();
+const slug = (q: string) => encodeURIComponent(cleanQuery(q)).replace(/%20/g, "-");
 
 const SOURCES: Source[] = [
   { id: "olx", name: "OLX", url: (q) => `https://www.olx.ua/uk/list/q-${slug(q).replace(/%2F/g, "-")}/` },
-  { id: "prom", name: "Prom.ua", url: (q) => `https://prom.ua/search?search_term=${encodeURIComponent(q)}` },
+  { id: "prom", name: "Prom.ua", url: (q) => `https://prom.ua/search?search_term=${encodeURIComponent(cleanQuery(q))}` },
   { id: "hotline", name: "Hotline", url: (q) => `https://hotline.ua/search/?q=${encodeURIComponent(q)}` },
   { id: "priceua", name: "Price.ua", url: (q) => `https://price.ua/search/?q=${encodeURIComponent(q)}` },
 ];
