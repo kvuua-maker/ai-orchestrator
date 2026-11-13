@@ -55,6 +55,7 @@ export default function ChatPage() {
   const [handoff, setHandoff] = useState<{ id: string; question: string; options: Array<{ id: string; label: string }> } | null>(null);
   const [manual, setManual] = useState("");
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [speakOut, setSpeakOut] = useState(true);
   const [proactive, setProactive] = useState<Array<{ label: string; text: string }>>([]);
   const recRef = useRef<any>(null);
@@ -297,7 +298,15 @@ export default function ChatPage() {
         setListening(false); setMicLevel(0); setMicSeconds(0);
 
         const previewText = preview.trim();
-        setThinking(true);
+        const bytes = chunks.reduce((n, c: any) => n + (c.size ?? 0), 0);
+        // порожній або надто короткий запис — не турбуємо сервер
+        if (bytes < 2000) {
+          setPreview("");
+          if (previewText) setText((prev) => fixTranscript((prev ? prev + " " : "") + previewText));
+          else setError("Запис порожній — натисніть 🎤 і говоріть ближче до мікрофона.");
+          return;
+        }
+        setTranscribing(true);
         try {
           const blob = new Blob(chunks, { type: mime.split(";")[0] });
           const res = await fetch(`${API}/v1/voice/transcribe`, {
@@ -313,7 +322,7 @@ export default function ChatPage() {
         } catch (e: any) {
           if (previewText) setText((prev) => fixTranscript((prev ? prev + " " : "") + previewText));
           else setError("Розпізнавання не вдалося: " + e.message);
-        } finally { setPreview(""); setThinking(false); }
+        } finally { setPreview(""); setTranscribing(false); }
       };
 
       recRef.current = rec; rec.start(); setListening(true); setError(null); setPreview("");
@@ -557,9 +566,9 @@ export default function ChatPage() {
                   background: listening ? "#3a1418" : "transparent", color: listening ? "#ff9b9b" : "#8b93a7", fontSize: 16, cursor: "pointer" }}>
                 {listening ? "■" : "🎤"}
               </button>
-              <button className="composer-send" onClick={() => send()} disabled={thinking || !text.trim()}
+              <button className="composer-send" onClick={() => send()} disabled={thinking || transcribing || !text.trim()}
                 style={{ background: thinking || !text.trim() ? "#2a3145" : "#4f7cff", color: "#fff", cursor: thinking ? "default" : "pointer" }}>
-                {thinking ? "…" : "Надіслати"}
+                {thinking || transcribing ? "…" : "Надіслати"}
               </button>
             </div>
             <div style={{ fontSize: 10, color: "#3f4759", marginTop: 5, textAlign: "center" }}>
