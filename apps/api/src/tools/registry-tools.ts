@@ -21,10 +21,22 @@ export async function vatFind(query: string, limit = 5) {
       `SELECT kod_pdv, name, registered_at, terminated_at FROM vat_payers WHERE kod_pdv=$1 LIMIT $2`, [q, limit]);
     return rows;
   }
-  const clean = q.replace(/(^|\s)(тов|тзов|фоп|пп|дп|кп|ат)(?=\s|$)/gi, " ").replace(/[«»"'()]/g, " ").replace(/\s{2,}/g, " ").trim().toLowerCase();
-  const { rows } = await db().query(
-    `SELECT kod_pdv, name, registered_at, terminated_at FROM vat_payers
-      WHERE lower(name) LIKE $1 ORDER BY (terminated_at='') DESC LIMIT $2`, [`%${clean}%`, limit]);
+  const stop = /^(знайди|перевір|покажи|хто|що|таке|іпн|податковий|номер|платник|пдв|дай|про|по|чи|є|за|в|у|на|з)$/i;
+  const clean = q.replace(/(^|\s)(тов|тзов|фоп|пп|дп|кп|ат)(?=\s|$)/gi, " ")
+    .replace(/[«»"'()]/g, " ").replace(/\s{2,}/g, " ").trim().toLowerCase();
+  const sql = `SELECT kod_pdv, name, registered_at, terminated_at FROM vat_payers
+                WHERE lower(name) LIKE $1 ORDER BY (terminated_at='') DESC LIMIT $2`;
+  let { rows } = await db().query(sql, [`%${clean}%`, limit]);
+  if (rows.length) return rows;
+  const words = clean.split(/[\s,]+/).map((w) => w.trim()).filter((w) => w.length >= 3 && !stop.test(w));
+  if (words.length >= 2) {
+    ({ rows } = await db().query(sql, [`%${words.slice(0, 3).join(" ")}%`, limit]));
+    if (rows.length) return rows;
+    for (const w of words) {
+      ({ rows } = await db().query(sql, [`%${w}%`, limit]));
+      if (rows.length) return rows;
+    }
+  }
   return rows;
 }
 

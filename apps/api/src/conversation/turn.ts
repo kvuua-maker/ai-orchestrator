@@ -100,6 +100,25 @@ export async function runTurn(
         const c = r.data.company;
         prefetched = `Готові дані про компанію (використай їх у відповіді):\nНазва: ${c.name}\nЄДРПОУ: ${c.edrpou ?? "—"}\nАдреса: ${c.address ?? "—"}\nКерівник: ${c.director ?? "—"}\nДіяльність: ${c.activity ?? "—"}\nДжерело: ${c.source} ${c.url}`;
       }
+    } else if (/(іпн|податков\w* номер|платник\w* пдв)/i.test(text)) {
+      // запит про ІПН/ПДВ — спершу локальна база податкової
+      const r = await (engine.tools as any).invoke("vat.check", { query: text.slice(0, 120) }, {
+        tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
+      }, "synthesizer");
+      const code = text.match(/\b\d{10}\b/)?.[0];
+      const r2 = code && !(r.ok && r.data?.found) ? await (engine.tools as any).invoke("vat.check", { query: code }, {
+        tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
+      }, "synthesizer") : r;
+      const items = (r2.ok ? r2.data?.items ?? [] : []) as any[];
+      if (items.length) {
+        const body = `**Платник ПДВ — знайдено ${items.length}**\n\n`
+          + items.slice(0, 5).map((i) => `- **${i.name}**\n  ІПН/код: \`${i.kod_pdv}\`\n  Зареєстровано платником: ${i.registered_at || "—"}${i.terminated_at ? `\n  Анульовано: ${i.terminated_at}` : ""}`).join("\n")
+          + `\n\n_Джерело: офіційний реєстр платників ПДВ ДПС (локальна копія)._`;
+        const m = await db.tx(tenantId, (q) => addMessage(q, {
+          tenantId, conversationId, role: "assistant", content: body, runId: null, meta: { intent: "answer" },
+        }));
+        return { intent: "answer", runId: null, messageId: m.id, content: body };
+      }
     } else if (nameMatch) {
       const r = await (engine.tools as any).invoke("search.web", { query: text.slice(0, 120), limit: 8 }, {
         tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
