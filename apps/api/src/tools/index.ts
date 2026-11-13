@@ -13,6 +13,10 @@ import { vatCheck, fopLookup } from "./registry-tools.js";
 import { courtSearch } from "./court-tool.js";
 import { docCheck } from "./doccheck-tool.js";
 import { propertyLookup } from "./property-tool.js";
+import { videoCreate } from "./video-tool.js";
+import { crmCreateLead } from "./crm-tool.js";
+import { novaposhtaTrack, novaposhtaCreateTtn } from "./novaposhta-tool.js";
+import { billingStatus } from "./billing-tool.js";
 import { createMemoryTools } from "./memory-tool.js";
 
 export interface RegistryDeps { db?: Db; embedder?: Embedder }
@@ -31,6 +35,11 @@ export function createRegistry(deps: RegistryDeps = {}): ToolRegistry {
     .register(courtSearch)
     .register(docCheck)
     .register(propertyLookup)
+    .register(videoCreate)
+    .register(crmCreateLead)
+    .register(novaposhtaTrack)
+    .register(novaposhtaCreateTtn)
+    .register(billingStatus)
     .register(documentsParseReceipt)
     .register(documentsProcess)
     .register(documentsExport)

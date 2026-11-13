@@ -34,6 +34,12 @@ export const PROVIDERS: Provider[] = [
     env: "OPENDATABOT_API_KEY", placeholder: "ключ з кабінету Opendatabot", docs: "https://opendatabot.com/apps", freeTier: "безкоштовний тариф" },
   { id: "scanbe", name: "scanbe.io — реєстри", what: "альтернативне джерело даних про нерухомість",
     env: "SCANBE_API_KEY", placeholder: "ключ scanbe.io", docs: "https://scanbe.io/", freeTier: "пробний доступ" },
+  { id: "pexels", name: "Pexels — стокові кадри для відео", what: "реальні фото/відео для сцен у video.create",
+    env: "PEXELS_API_KEY", placeholder: "Pexels API key", docs: "https://www.pexels.com/api/", freeTier: "безкоштовно 200 запитів/год" },
+  { id: "novaposhta", name: "Нова Пошта — ТТН і трекінг", what: "створення накладних та відстеження посилок",
+    env: "NOVAPOSHTA_API_KEY", placeholder: "API-ключ Нової Пошти", docs: "https://my.novaposhta.ua/settings/index#apikeys", freeTier: "безкоштовно для бізнес-кабінету" },
+  { id: "keycrm", name: "KeyCRM — ліди та замовлення", what: "створення лідів із чату (crm.create_lead)",
+    env: "KEYCRM_API_KEY", placeholder: "KeyCRM API token", docs: "https://keycrm.ua/", freeTier: "пробний період" },
   { id: "deepseek", name: "DeepSeek — мова", what: "генерація відповідей і виклик інструментів",
     env: "DEEPSEEK_API_KEY", placeholder: "sk-...", docs: "https://platform.deepseek.com/api_keys", freeTier: "платно за токени" },
 ];
@@ -119,6 +125,22 @@ export async function testKey(provider: string, secret: string): Promise<{ ok: b
     if (provider === "scanbe") {
       const res = await fetch("https://scanbe.io/", { signal: AbortSignal.timeout(10_000) });
       return { ok: res.ok, message: res.ok ? "scanbe.io доступний (перевірте ключ у кабінеті)" : `scanbe повернув ${res.status}`, ms: Date.now() - t0 };
+    }
+    if (provider === "pexels") {
+      const res = await fetch("https://api.pexels.com/v1/search?query=test&per_page=1", { headers: { authorization: secret }, signal: AbortSignal.timeout(10_000) });
+      return { ok: res.ok, message: res.ok ? "Pexels відповідає, ключ дійсний" : `Pexels повернув ${res.status}`, ms: Date.now() - t0 };
+    }
+    if (provider === "novaposhta") {
+      const res = await fetch("https://api.novaposhta.ua/v2.0/json/", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: secret, modelName: "Common", calledMethod: "getTimeIntervals", methodProperties: {} }),
+        signal: AbortSignal.timeout(10_000) });
+      const j: any = await res.json().catch(() => ({}));
+      return { ok: Boolean(j?.success), message: j?.success ? "Нова Пошта відповідає, ключ дійсний" : `Нова Пошта: ${(j?.errors ?? []).join("; ") || res.status}`, ms: Date.now() - t0 };
+    }
+    if (provider === "keycrm") {
+      const res = await fetch("https://openapi.keycrm.app/v1/order?limit=1", { headers: { authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(10_000) });
+      return { ok: res.ok, message: res.ok ? "KeyCRM відповідає" : `KeyCRM повернув ${res.status}`, ms: Date.now() - t0 };
     }
     if (provider === "deepseek") {
       const res = await fetch("https://api.deepseek.com/models", { headers: { authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(10_000) });
