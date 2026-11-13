@@ -87,6 +87,51 @@ export async function runTurn(
     }
   } catch { facts = []; }
 
+  // 3.4) миттєві шляхи без LLM: арифметика і коди ЄДРПОУ/ІПН
+  {
+    const mathText = text.replace(/^(скільки\s+буде|порахуй|обчисли|скільки\s+це)\s*/i, "").replace(/[?=]/g, "").trim();
+    if (/^[-+*/()\d\s.,%]+$/.test(mathText) && /\d/.test(mathText) && /[+*/%-]/.test(mathText)) {
+      try {
+        const expr = mathText.replace(/,/g, ".").replace(/%/g, "/100");
+        // безпечний обчислювач: лише цифри та оператори
+        if (!/^[\d+*/()\-.\s]+$/.test(expr)) throw new Error("bad");
+        const val = Function(`"use strict";return (${expr})`)();
+        if (typeof val === "number" && Number.isFinite(val)) {
+          const shown = Number.isInteger(val) ? String(val) : String(Math.round(val * 1e6) / 1e6);
+          const body = `**${shown}**`;
+          const m = await db.tx(tenantId, (q) => addMessage(q, {
+            tenantId, conversationId, role: "assistant", content: body, runId: null, meta: { intent: "answer", fast: "math" },
+          }));
+          return { intent: "answer", runId: null, messageId: m.id, content: body };
+        }
+      } catch { /* не арифметика — йдемо далі */ }
+    }
+
+    // чистий код (8–12 цифр) — одразу в реєстр
+    const onlyCode = text.trim().match(/^\d{8,12}$/)?.[0];
+    if (onlyCode) {
+      const tryTool = async (t: string) => (engine.tools as any).invoke(t, { query: onlyCode }, {
+        tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.2, artifacts: engine.artifacts,
+      }, "synthesizer").catch(() => null);
+      // 10-значний код може бути і ЄДРПОУ, і ІПН — перевіряємо обидва реєстри
+      // 8 цифр — ЄДРПОУ; 12 — ІПН; 10 — буває і те, і те, тому ПДВ першим
+      const firstTool = onlyCode.length === 8 ? "edr.lookup" : onlyCode.length === 12 ? "vat.check" : "vat.check";
+      let r = await tryTool(firstTool);
+      let items = (r?.ok ? r.data?.items ?? [] : []) as any[];
+      if (!items.length) { r = await tryTool(firstTool === "vat.check" ? "edr.lookup" : "vat.check"); items = (r?.ok ? r.data?.items ?? [] : []) as any[]; }
+      if (items.length) {
+        const it = items[0];
+        const body = it.edrpou
+          ? `**${it.name}**\n\n| Поле | Дані |\n|---|---|\n| ЄДРПОУ | ${it.edrpou} |\n| Статус | ${it.status ?? "—"} |\n| Керівник | ${it.director ?? "—"} |\n| Зареєстровано | ${it.registered_at ?? "—"} |\n\n_Джерело: офіційний ЄДР (локальна копія)._`
+          : `**Платник ПДВ**\n\n| Поле | Дані |\n|---|---|\n| Код | ${it.kod_pdv} |\n| Назва | ${it.name} |\n| Зареєстровано | ${it.registered_at ?? "—"} |\n\n_Джерело: реєстр платників ПДВ ДПС._`;
+        const m = await db.tx(tenantId, (q) => addMessage(q, {
+          tenantId, conversationId, role: "assistant", content: body, runId: null, meta: { intent: "answer", fast: "code" },
+        }));
+        return { intent: "answer", runId: null, messageId: m.id, content: body };
+      }
+    }
+  }
+
   // 3.5) префетч для типових запитів: людина за ПІБ / компанія — одразу потрібне джерело
   let prefetched = "";
   const isCompany = /(тов|тзов|фоп|пат|єдрпоу|компані)/i.test(text);

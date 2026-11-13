@@ -39,6 +39,15 @@ export interface AgentTurnResult {
   ms: number;
 }
 
+/** Прибирає службову розмітку виклику інструментів, якщо модель віддала її як текст. */
+export function stripToolMarkup(text: string): string {
+  return String(text)
+    .replace(/<[｜|]{1,2}DSML[｜|]{1,2}[\s\S]*?(?=<\/|$)/gi, " ")
+    .replace(/<[｜|]{1,2}[\s\S]*?[｜|]{1,2}>/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Прибирає HTML-сміття: модель має бачити текст, а не розмітку. */
 function plain(text: string): string {
   return String(text)
@@ -220,5 +229,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       ? "Ось що вже вдалося перевірити — цього достатньо для відповіді."
       : "Не встиг за відведений час. Спробуйте сформулювати вужче — відповім швидко.";
   }
+  if (content) content = stripToolMarkup(content);
+
   return { content, toolCalls: used, iterations, ms: Date.now() - t0, deadlineHit };
 }
