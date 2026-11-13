@@ -10,7 +10,7 @@ import type { ToolRegistry } from "../tools/index.js";
  */
 
 const CHAT_TOOLS = new Set([
-  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "search.web", "telegram.lookup",
+  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "vat.check", "fop.lookup", "search.web", "telegram.lookup",
   "memory.search", "memory.remember",
   "documents.process", "documents.parseReceipt", "documents.export",
 ]);

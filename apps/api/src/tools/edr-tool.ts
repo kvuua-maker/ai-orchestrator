@@ -8,8 +8,10 @@ import { defineTool } from "./sdk.js";
  */
 
 let pool: pg.Pool | null = null;
+// діагностика: якщо рядка немає — кидаємо зрозумілу помилку
 function db(): pg.Pool {
   if (!pool) {
+    if (!(process.env.EDR_DATABASE_URL ?? process.env.DATABASE_URL)) throw new Error("DATABASE_URL missing");
     pool = new pg.Pool({
       connectionString: process.env.EDR_DATABASE_URL ?? process.env.DATABASE_URL,
       max: 3, idleTimeoutMillis: 30_000,
@@ -30,16 +32,25 @@ export async function edrFind(query: string, limit = 5): Promise<EdrRow[]> {
       `SELECT edrpou,name,short_name,opf,status,director,registered_at FROM edr_subjects WHERE edrpou=$1 LIMIT $2`, [q, limit]);
     return rows;
   }
-  // прибираємо організаційно-правову форму й лапки, шукаємо за триграмами
+  // прибираємо ОПФ, лапки й дієслова-команди, шукаємо за триграмами
+  const stop = /^(перевір|знайди|покажи|дай|що|таке|компанію|компанія|фірму|реєстр|реєстрі|інформацію|про|по|чи|є|в|у|на|з|для)$/i;
   const clean = q.replace(/(^|\s)(тов|тзов|пат|фоп|дп|кп|пп|ат|prat|пpат)(?=\s|$)/gi, " ")
     .replace(/[«»"'()]/g, " ").replace(/\s{2,}/g, " ").trim();
-  const { rows } = await db().query<EdrRow>(
-    `SELECT edrpou,name,short_name,opf,status,director,registered_at
-       FROM edr_subjects
-      WHERE lower(name) LIKE $1 OR lower(short_name) LIKE $1
-      ORDER BY (status <> 'припинено') DESC, length(name) ASC
-      LIMIT $2`, [`%${clean.toLowerCase()}%`, limit]);
-  return rows;
+  const sql = `SELECT edrpou,name,short_name,opf,status,director,registered_at
+                 FROM edr_subjects
+                WHERE lower(name) LIKE $1 OR lower(short_name) LIKE $1
+                ORDER BY (status <> 'припинено') DESC, length(name) ASC
+                LIMIT $2`;
+  let { rows } = await db().query<EdrRow>(sql, [`%${clean.toLowerCase()}%`, limit]);
+  if (rows.length) return rows;
+
+  // фолбек: пробуємо окремі значущі слова («перевір компанію АТБ в реєстрі» → АТБ)
+  const words = clean.split(/[\s,]+/).map((w) => w.trim()).filter((w) => w.length >= 3 && !stop.test(w));
+  for (const w of words.sort((a, b) => b.length - a.length).slice(0, 3)) {
+    ({ rows } = await db().query<EdrRow>(sql, [`%${w.toLowerCase()}%`, limit]));
+    if (rows.length) return rows;
+  }
+  return [];
 }
 
 export const edrLookup = defineTool({
