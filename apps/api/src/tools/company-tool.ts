@@ -101,7 +101,7 @@ export const companyLookup = defineTool({
   }),
   risk: "read", effectClass: "pure", costClass: "cheap",
   scopes: ["browser:read"], agents: ["browser", "data", "synthesizer", "verifier"],
-  timeoutMs: 32_000, maxRetries: 0,
+  timeoutMs: 15_000, maxRetries: 0,
   async execute({ query }) {
     const tried: string[] = [];
     // 1) локальний офіційний ЄДР — мілісекунди

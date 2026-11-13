@@ -129,6 +129,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
 
   const used: Array<{ name: string; ok: boolean }> = [];
   const findings: string[] = [];
+  // дедуплікація: однакові виклики не повторюються, пошук — максимум 2 рази за хід
+  const callCache = new Map<string, any>();
+  let searchCount = 0;
+  let toolsDisabled = false;
+  // інструменти, чий успішний результат уже достатній для відповіді
+  const DEFINITIVE = new Set(["edr.lookup", "company.lookup", "fop.lookup", "vat.check", "market.prices"]);
   let content = "";
   let iterations = 0;
   const maxSteps = input.maxSteps ?? 5;
@@ -144,7 +150,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     const remainingMs = Math.max(5_000, Math.min(60_000, deadline - Date.now()));
     const r = await input.llm.chat({
       messages,
-      tools: defs,
+      ...(toolsDisabled || !defs.length ? {} : { tools: defs }),
       maxTokens: 1400,
       temperature: 0.4,
       timeoutMs: Math.min(25_000, Math.max(6_000, deadline - Date.now())),
@@ -163,6 +169,19 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     // незалежні виклики в одному повідомленні — паралельно
     const results = await Promise.all(r.toolCalls.map(async (call) => {
       const realName = fromApi.get(call.name) ?? call.name.replace(/_/g, ".");
+      const key = `${realName}|${JSON.stringify(call.args)}`;
+
+      // 1) точний повтор того самого виклику — беремо з кешу
+      if (callCache.has(key)) {
+        input.onStep(`${realName} — уже виконано, беру результат`, "done");
+        return { call, res: callCache.get(key), realName, cached: true };
+      }
+      // 2) забагато пошуків — примусово завершуємо
+      if (realName === "search.web" && searchCount >= 2) {
+        return { call, res: { ok: false, error: { code: "VALIDATION", message: "пошук уже виконувався — відповідай на основі наявних даних" } }, realName, limited: true };
+      }
+      if (realName === "search.web") searchCount++;
+      console.error(`[agent] call ${realName} ${JSON.stringify(call.args).slice(0, 120)}`);
       input.onStep(`${realName}(${Object.keys(call.args).slice(0, 2).join(", ")})`, "running");
       let res: any;
       try {
@@ -174,6 +193,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         res = { ok: false, error: { code: "TOOL_ERROR", message: String(e?.message ?? e) } };
       }
       input.onStep(`${realName} → ${res.ok ? "ок" : res.error?.code ?? "помилка"}`, res.ok ? "done" : "failed");
+      callCache.set(key, res);
       used.push({ name: realName, ok: Boolean(res.ok) });
       if (res.ok) {
         const line = plain(summarize(realName, res).split("\n")[0] ?? "").slice(0, 220);
@@ -183,8 +203,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     }));
 
     for (const { call, res, realName } of results) {
-      messages.push({ role: "tool", tool_call_id: call.id, content: summarize(realName, res) });
+      messages.push({ role: "tool", tool_call_id: call.id, content: summarize(realName, res as any) });
     }
+    // результат реєстрового інструмента достатній — далі лише фінальна відповідь
+    const definitiveHit = results.some(({ res, realName }: any) =>
+      res?.ok && DEFINITIVE.has(realName) && summarize(realName, res) !== "");
+    if (definitiveHit) toolsDisabled = true;
   }
 
   if (deadlineHit) {

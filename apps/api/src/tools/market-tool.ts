@@ -99,7 +99,7 @@ export const marketPrices = defineTool({
   }),
   risk: "read", effectClass: "pure", costClass: "cheap",
   scopes: ["browser:read"], agents: ["browser", "data", "synthesizer", "verifier"],
-  timeoutMs: 30_000, maxRetries: 0,
+  timeoutMs: 25_000, maxRetries: 0,
   async execute({ query, minPrice, maxResults }) {
     const { getBrowser } = await import("./browser-tool.js");
     const browser: any = await getBrowser();

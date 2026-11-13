@@ -57,7 +57,7 @@ export const searchWeb = defineTool({
   }),
   risk: "read", effectClass: "pure", costClass: "free",
   scopes: ["web:search"], agents: ["synthesizer", "browser", "data", "verifier"],
-  timeoutMs: 20_000, maxRetries: 0,
+  timeoutMs: 15_000, maxRetries: 0,
   async execute({ query, limit }) {
     const n = limit ?? 8;
     const searx = await viaSearxng(query, n).catch(() => [] as Hit[]);

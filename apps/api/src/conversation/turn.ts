@@ -90,7 +90,7 @@ export async function runTurn(
   // 3.5) префетч для типових запитів: людина за ПІБ / компанія — одразу потрібне джерело
   let prefetched = "";
   const isCompany = /(тов|тзов|фоп|пат|єдрпоу|компані)/i.test(text);
-  const nameMatch = text.match(/\b([А-ЯІЇЄҐ][а-яіїєґ’'-]{2,})\s+([А-ЯІЇЄҐ][а-яіїєґ’'-]{2,})(?:\s+([А-ЯІЇЄҐ][а-яіїєґ’'-]{2,}))?/);
+  const nameMatch = text.match(/(?:^|[\s,.;:(])([А-ЯІЇЄҐ][а-яіїєґ’'\-]{2,})\s+([А-ЯІЇЄҐ][а-яіїєґ’'\-]{2,})(?:\s+([А-ЯІЇЄҐ][а-яіїєґ’'\-]{2,}))?/);
   try {
     if (isCompany) {
       const r = await (engine.tools as any).invoke("company.lookup", { query: text.slice(0, 120) }, {
@@ -117,7 +117,7 @@ export async function runTurn(
         return { intent: "answer", runId: null, messageId: m.id, content: body };
       }
     }
-  } catch { prefetched = ""; }
+  } catch (e: any) { prefetched = ""; console.error("[prefetch]", e?.message ?? e); }
 
   // 4) основний шлях: function calling — модель сама вирішує, відповісти чи діяти
   const messageId = `msg_a_${Date.now().toString(36)}`;
