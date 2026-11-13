@@ -119,6 +119,16 @@ export default function ChatPage() {
         sseAlive.current = true;
         setThinking(false);
         setStreaming({ id: d.messageId, text: "" });
+        // якщо за 12 с не прийшло жодного символу — не показуємо порожній блок
+        setTimeout(() => {
+          setStreaming((cur) => {
+            if (cur && cur.id === d.messageId && !cur.text) {
+              setError("Не вдалося отримати текст відповіді. Спробуйте ще раз.");
+              return null;
+            }
+            return cur;
+          });
+        }, 12_000);
         setSteps((prev) => prev.filter((x) => !x.label.startsWith("Думаю над планом")));
       } else if (type === "message.delta") {
         setStreaming((prev) => ({ id: d.messageId, text: (prev && prev.id === d.messageId ? prev.text : "") + d.text }));
@@ -249,7 +259,30 @@ export default function ChatPage() {
           setError("Розпізнавання не вдалося: " + e.message);
         } finally { setThinking(false); }
       };
+      // ── VAD: чекаємо, поки людина закінчить говорити (1.5 с тиші) ──
+      const actx = new AudioContext();
+      await actx.resume().catch(() => {});
+      const analyser = actx.createAnalyser();
+      analyser.fftSize = 1024;
+      actx.createMediaStreamSource(stream).connect(analyser);
+      const frame = new Uint8Array(analyser.fftSize);
+      let lastVoice = Date.now();
+      let spokeAt = 0;
+      const vad = setInterval(() => {
+        analyser.getByteTimeDomainData(frame);
+        let sum = 0;
+        for (let i = 0; i < frame.length; i++) { const v = (frame[i]! - 128) / 128; sum += v * v; }
+        const rms = Math.sqrt(sum / frame.length);
+        (window as any).__rms = rms;
+        if (rms > 0.008) { lastVoice = Date.now(); if (!spokeAt) spokeAt = Date.now(); }
+        else if (spokeAt && Date.now() - lastVoice > 1500) { rec.stop(); }
+      }, 100);
+      const cleanupVad = () => { clearInterval(vad); actx.close().catch(() => {}); };
+      const stopHandler = rec.onstop;
+      rec.onstop = (ev: Event) => { cleanupVad(); if (stopHandler) (stopHandler as any).call(rec, ev); };
+
       recRef.current = rec; rec.start(); setListening(true); setError(null);
+      setTimeout(() => { if (rec.state === "recording") rec.stop(); }, 30_000);
     } catch (e: any) {
       setListening(false);
       const insecure = typeof window !== "undefined" && !window.isSecureContext;
@@ -399,7 +432,7 @@ export default function ChatPage() {
             {msgs.map((m) => <Bubble key={m.id} msg={m} onPick={send} onConfirm={startConfirmed} onEdit={(t) => { setText(t); }} />)}
 
             {thinking && <Typing />}
-            {streaming && (
+            {streaming && streaming.text.length > 0 && (
               <div className="bubble-row">
                 <Avatar />
                 <div className="bubble bubble-bot">

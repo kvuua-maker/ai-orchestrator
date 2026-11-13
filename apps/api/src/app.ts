@@ -20,7 +20,7 @@ import { TRACE_HEADER, isValidTraceId, newTraceId, logLine } from "./observabili
 import { createServiceDb } from "./db/index.js";
 import { runTurn } from "./conversation/turn.js";
 import { buildSuggestions } from "./conversation/proactive.js";
-import { transcribe } from "./voice/whisper.js";
+import { preloadWhisper, transcribe } from "./voice/whisper.js";
 import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";

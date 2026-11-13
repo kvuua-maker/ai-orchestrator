@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +13,60 @@ const EXT: Record<string, string> = {
   "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/m4a": "m4a",
   "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
 };
+
+/** Постійний процес: модель вантажиться один раз, а не на кожен запит. */
+class Worker {
+  private child: ChildProcess | null = null;
+  private buf = "";
+  private seq = 0;
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+
+  private start(): ChildProcess {
+    if (this.child && !this.child.killed) return this.child;
+    const child = spawn(process.execPath, [WORKER], { stdio: ["pipe", "pipe", "pipe"] });
+    child.stdout!.on("data", (chunk) => {
+      this.buf += chunk.toString();
+      let i: number;
+      while ((i = this.buf.indexOf("\n")) >= 0) {
+        const line = this.buf.slice(0, i).trim();
+        this.buf = this.buf.slice(i + 1);
+        if (!line) continue;
+        let msg: any;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.ready || msg.id === undefined) continue;
+        const p = this.pending.get(msg.id);
+        if (!p) continue;
+        this.pending.delete(msg.id);
+        clearTimeout(p.timer);
+        msg.ok ? p.resolve(msg) : p.reject(new Error(msg.error));
+      }
+    });
+    child.stderr!.on("data", (c) => process.stderr.write(`[stt] ${c}`));
+    child.on("exit", () => {
+      this.child = null;
+      for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error("STT-процес завершився")); }
+      this.pending.clear();
+    });
+    this.child = child;
+    return child;
+  }
+
+  request(payload: Omit<any, "id">): Promise<any> {
+    const child = this.start();
+    const id = ++this.seq;
+    return new Promise((resolveOut, rejectOut) => {
+      const timer = setTimeout(() => { this.pending.delete(id); rejectOut(new Error("STT перевищив 120 с")); }, 120_000);
+      this.pending.set(id, { resolve: resolveOut, reject: rejectOut, timer });
+      child.stdin!.write(JSON.stringify({ ...payload, id }) + "\n");
+    });
+  }
+
+  /** Прогрів: 0.5 с тиші змушує воркер завантажити модель заздалегідь. */
+  warm() { this.request({ pcm: new Array(8000).fill(0), language: "ukrainian", model: MODEL, cacheDir: CACHE }).catch(() => {}); }
+}
+
+const worker = new Worker();
+let warmed = false;
 
 async function toPcm(audio: Buffer, ext: string): Promise<Float32Array> {
   const dir = await mkdtemp(join(tmpdir(), "aio-stt-"));
@@ -31,38 +85,23 @@ async function toPcm(audio: Buffer, ext: string): Promise<Float32Array> {
 
 export interface SttResult { text: string; ms: number; model: string; seconds: number; engine: string }
 
-/**
- * Whisper в окремому процесі: fastembed і transformers тягнуть різні версії
- * onnxruntime, і в одному процесі вони конфліктують (`VERS_1.30.0 not found`).
- */
+/** Викликати при старті сервера, щоб перший запис не чекав 10 с. */
+export function preloadWhisper(): void {
+  setTimeout(() => { try { worker.warm(); } catch { /* ignore */ } }, 500);
+}
+
 export async function transcribe(audio: Buffer, mime: string, lang = "ukrainian"): Promise<SttResult> {
   if (audio.length < 2000) throw new Error("аудіо занадто коротке");
   const t0 = Date.now();
+  if (!warmed) { warmed = true; worker.warm(); }
   const pcm = await toPcm(audio, EXT[mime.split(";")[0]!.trim()] ?? "webm");
   const seconds = pcm.length / 16000;
   if (seconds < 0.3) throw new Error("запис занадто короткий");
+  // порожня тиша: не турбуємо модель
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i += 32) { const v = Math.abs(pcm[i]!); if (v > peak) peak = v; }
+  if (peak < 0.004) return { text: "", ms: Date.now() - t0, model: MODEL, seconds: Math.round(seconds * 10) / 10, engine: "silence" };
 
-  const payload = JSON.stringify({ pcm: Array.from(pcm), language: lang, model: MODEL, cacheDir: CACHE });
-  const stdout = await new Promise<string>((resolveOut, rejectOut) => {
-    const child = spawn(process.execPath, [WORKER], { stdio: ["pipe", "pipe", "pipe"] });
-    let out = "", err = "";
-    const timer = setTimeout(() => { child.kill("SIGKILL"); rejectOut(new Error("STT перевищив 120 с")); }, 120_000);
-    child.stdout.on("data", (c) => { out += c.toString(); });
-    child.stderr.on("data", (c) => { err += c.toString(); });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0 && out.trim()) resolveOut(out.trim());
-      else rejectOut(new Error(`STT-процес завершився з кодом ${code}: ${err.slice(0, 200)}`));
-    });
-    child.on("error", (e) => { clearTimeout(timer); rejectOut(e); });
-    child.stdin.write(payload);
-    child.stdin.end();
-  });
-
-  let parsed: any = null;
-  try { parsed = JSON.parse(stdout); } catch { /* нижче */ }
-  if (!parsed) throw new Error("STT-процес не повернув відповідь");
-  if (!parsed.ok) throw new Error(parsed.error);
-
-  return { text: String(parsed.text ?? ""), ms: Date.now() - t0, model: MODEL, seconds: Math.round(seconds * 10) / 10, engine: "whisper-worker" };
+  const out = await worker.request({ pcm: Array.from(pcm), language: lang, model: MODEL, cacheDir: CACHE });
+  return { text: String(out.text ?? ""), ms: Date.now() - t0, model: MODEL, seconds: Math.round(seconds * 10) / 10, engine: "whisper-worker" };
 }
