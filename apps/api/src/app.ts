@@ -21,6 +21,7 @@ import { createServiceDb } from "./db/index.js";
 import { runTurn } from "./conversation/turn.js";
 import { buildSuggestions } from "./conversation/proactive.js";
 import { preloadWhisper, transcribe } from "./voice/whisper.js";
+import { ensureLiveBrowser, liveStatus, vncInfo } from "./live/session.js";
 import { createConversation, listConversations, getConversation, getHistory } from "./conversation/store.js";
 import { getQuota, getUsage, listPlans, setPlan, recordUsage, createInvoice, listInvoices } from "./billing/index.js";
 import { ingestText, searchMemory, memoryStats } from "./memory/store.js";
@@ -461,6 +462,15 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance &
       metrics.inc("aio_stt_requests_total", { ok: "false" });
       return reply.code(500).send({ error: { code: "STT_FAILED", message: String(e.message).slice(0, 200) } });
     }
+  });
+
+  // ── живий браузер (людина проходить перевірку сама) ──
+  app.get("/v1/live", async () => ({ ...(await liveStatus()), ...vncInfo() }));
+
+  app.post("/v1/live/start", async (req: any) => {
+    const url = String((req.body as any)?.url ?? "").trim();
+    const r = await ensureLiveBrowser(url || undefined);
+    return { ...r, ...(await liveStatus()), ...vncInfo() };
   });
 
   app.get("/v1/proactive", async (req: any) => {

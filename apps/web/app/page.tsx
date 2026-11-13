@@ -465,7 +465,12 @@ export default function ChatPage() {
           {handoff && (
             <div style={{ margin: "6px 0", padding: "12px 14px", borderRadius: 10, background: "#241b0a", border: "1px solid #5a4318" }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Потрібна ваша участь</div>
-              <div style={{ fontSize: 12.5, color: "#e8d5a8", lineHeight: 1.6 }}>{handoff.question}</div>
+              <div style={{ fontSize: 12.5, color: "#e8d5a8", lineHeight: 1.6 }}>
+                {handoff.question.split(/(https?:\/\/\S+)/g).map((part, i) =>
+                  /^https?:\/\//.test(part)
+                    ? <a key={i} href={part} target="_blank" rel="noopener" style={{ color: "#7fb0ff", textDecoration: "underline" }}>{part}</a>
+                    : <span key={i}>{part}</span>)}
+              </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
                 <button onClick={() => answerHandoff("done")} style={{ padding: "8px 14px", borderRadius: 8, border: 0, background: "#4f7cff", color: "#fff", fontSize: 13, cursor: "pointer" }}>Продовжити</button>
                 <button onClick={() => answerHandoff("skip")} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #2a3145", background: "transparent", color: "#c7ccd8", fontSize: 13, cursor: "pointer" }}>Пропустити сайт</button>

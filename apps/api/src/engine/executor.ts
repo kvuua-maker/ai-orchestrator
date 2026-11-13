@@ -190,6 +190,31 @@ export function createEngine(db: Db, deps: EngineDeps = {}): Engine {
           publishStep(`Не вдалося: ${verdict.reason}`, "failed", "✕");
           out.blockers.push(verdict.message);
 
+          // ── Живий браузер: людина сама проходить перевірку, агент потім працює в тій самій сесії ──
+          if (/antibot|blocked|captcha/i.test(verdict.reason ?? "")) {
+            try {
+              const { ensureLiveBrowser, vncInfo } = await import("../live/session.js");
+              await ensureLiveBrowser(url || undefined);
+              const v = vncInfo();
+              if (v.url) {
+                verdict.question = `Сайт показує перевірку безпеки. Відкрийте живий браузер: ${v.url}/vnc.html?autoconnect=1&resize=scale `
+                  + `(пароль VNC: ${v.password}). Пройдіть перевірку там — потім натисніть «Продовжити», і я працюватиму в цій самій сесії з вашими cookies.`;
+                publishStep("Відкрив живий браузер для вас", "done", "🖥");
+                // зупиняємось і чекаємо людину: жодних «альтернатив» замість її сайту
+                out.status = "blocked";
+                out.summary = "handoff: живий браузер";
+                out.blockers.push(verdict.question);
+                paused = verdict;
+                const h = await step((q) => createHandoff(q, { tenantId, runId, taskId: node.id, verdict }));
+                await step((q) => appendEvent(q, runId, "handoff.requested", {
+                  handoffId: h.id, reason: verdict.reason, kind: verdict.kind,
+                  question: h.question, options: h.options, live: true,
+                }));
+                break;
+              }
+            } catch { /* живий браузер недоступний — лишаємо звичайний handoff */ }
+          }
+          // ── запасний варіант: ціни з маркетплейсів (якщо живий браузер недоступний) ──
           // Smart Fallback: блокування прямого сайту → сам шукаю ціни на маркетплейсах
           if (/antibot|blocked/i.test(verdict.reason ?? "") && tools.has("market.prices")) {
             // запит має бути назвою товару, а не текстом задачі

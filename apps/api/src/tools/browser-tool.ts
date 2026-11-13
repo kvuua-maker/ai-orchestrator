@@ -51,6 +51,13 @@ export const browserOpen = defineTool({
   scopes: ["browser:read"], agents: ["browser", "data", "verifier", "synthesizer"],
   timeoutMs: 60_000, maxRetries: 0,
   async execute({ url, waitMs, scroll }) {
+    // якщо користувач уже пройшов перевірку у «живому браузері» — працюємо в тій самій сесії
+    const { fetchViaLive } = await import("../live/session.js");
+    const live = await fetchViaLive(url, waitMs ?? 2500).catch(() => null);
+    if (live && live.status && live.status < 400 && !CHALLENGE_RE.test(live.title)) {
+      return { data: { ...live, url, blocked: false, shop: /(кошик|купити|ціна|каталог|₴)/i.test(live.text), prices: live.prices } };
+    }
+
     const browser = await getBrowser();
     const ctx = await browser.newContext({
       locale: "uk-UA", timezoneId: "Europe/Kyiv",
