@@ -100,6 +100,23 @@ export async function runTurn(
         const c = r.data.company;
         prefetched = `Готові дані про компанію (використай їх у відповіді):\nНазва: ${c.name}\nЄДРПОУ: ${c.edrpou ?? "—"}\nАдреса: ${c.address ?? "—"}\nКерівник: ${c.director ?? "—"}\nДіяльність: ${c.activity ?? "—"}\nДжерело: ${c.source} ${c.url}`;
       }
+    } else if (/(судов|суді|справ[аиу]?\s|рішенн|ухвал|вирок|позов)/i.test(text) && !isCompany) {
+      // запит про судові справи — реєстр рішень, а не загальний пошук
+      const q = (nameMatch?.[0] ?? text).replace(/знайди|судові|справи|за|про/gi, " ").replace(/\s{2,}/g, " ").trim().slice(0, 120);
+      const r = await (engine.tools as any).invoke("court.search", { query: q || text.slice(0, 120), limit: 8 }, {
+        tenantId, runId: "chat", taskId: "prefetch", dryRun: false, budgetUsd: 0.3, artifacts: engine.artifacts,
+      }, "synthesizer");
+      const hits = (r.ok ? r.data?.hits ?? [] : []) as any[];
+      if (hits.length) {
+        const body = `**Судові справи за «${q || text.slice(0, 60)}» — ${r.data.total} документів у реєстрі**\n\n`
+          + hits.slice(0, 8).map((h) => `- **${h.caseNumber || h.id}** · ${h.type || "документ"} · ${h.date}\n  ${h.court}\n  [відкрити рішення](${h.url})`).join("\n")
+          + `\n\n_Джерело: Єдиний державний реєстр судових рішень._`;
+        const m = await db.tx(tenantId, (q2) => addMessage(q2, {
+          tenantId, conversationId, role: "assistant", content: body, runId: null,
+          meta: { intent: "answer", court: true },
+        }));
+        return { intent: "answer", runId: null, messageId: m.id, content: body };
+      }
     } else if (/(іпн|податков\w* номер|платник\w* пдв)/i.test(text)) {
       // запит про ІПН/ПДВ — спершу локальна база податкової
       const r = await (engine.tools as any).invoke("vat.check", { query: text.slice(0, 120) }, {

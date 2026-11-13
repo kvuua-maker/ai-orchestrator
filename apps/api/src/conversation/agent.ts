@@ -10,7 +10,7 @@ import type { ToolRegistry } from "../tools/index.js";
  */
 
 const CHAT_TOOLS = new Set([
-  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "vat.check", "fop.lookup", "search.web", "telegram.lookup",
+  "http.fetch", "browser.open", "market.prices", "company.lookup", "edr.lookup", "vat.check", "fop.lookup", "court.search", "search.web", "telegram.lookup",
   "memory.search", "memory.remember",
   "documents.process", "documents.parseReceipt", "documents.export",
 ]);
@@ -134,7 +134,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   let searchCount = 0;
   let toolsDisabled = false;
   // інструменти, чий успішний результат уже достатній для відповіді
-  const DEFINITIVE = new Set(["edr.lookup", "company.lookup", "fop.lookup", "vat.check", "market.prices"]);
+  const DEFINITIVE = new Set(["edr.lookup", "company.lookup", "fop.lookup", "court.search", "vat.check", "market.prices"]);
   let content = "";
   let iterations = 0;
   const maxSteps = input.maxSteps ?? 5;
