@@ -100,7 +100,9 @@ async function viaGroq(audio: Buffer, mime: string, lang: string): Promise<SttRe
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array(audio)], { type: mime }), `audio.${ext}`);
     form.append("model", process.env.GROQ_STT_MODEL ?? "whisper-large-v3-turbo");
-    form.append("language", lang.slice(0, 2) === "uk" ? "uk" : lang);
+    // Groq приймає ISO-коди, не назви мов
+    const ISO: Record<string, string> = { ukrainian: "uk", english: "en", russian: "ru", polish: "pl", german: "de", french: "fr", spanish: "es" };
+    form.append("language", ISO[lang] ?? lang.slice(0, 2));
     form.append("response_format", "json");
     form.append("temperature", "0");
 
