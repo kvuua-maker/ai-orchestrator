@@ -75,7 +75,10 @@ describe("Observability API", () => {
   });
 
   it("summary не протікає між тенантами", async () => {
-    const own = await app.db.tx("tnt_other001", (q) => q<any>("SELECT count(*)::int AS n FROM runs"));
+    // API рахує запуски за вікном (типово 24 год) — порівнюємо в тому ж вікні,
+    // інакше тест ламається, щойно в базі з'являються старіші запуски
+    const own = await app.db.tx("tnt_other001", (q) => q<any>(
+      "SELECT count(*)::int AS n FROM runs WHERE created_at > now() - interval '24 hours'"));
     const r = await app.inject({ method: "GET", url: "/v1/observability/summary", headers: { "x-tenant-id": "tnt_other001" } });
     expect(r.json().runs.total).toBe(own.rows[0].n);   // рівно свої, без чужих
   });
